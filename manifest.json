@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "Octopus & Kraken - Récapitulatif Contrat",
+  "version": "1.0.0",
+  "description": "Affiche instantanément les tarifs et les données de l'espace client depuis Kraken ou l'espace client Octopus Energy.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting",
+    "storage",
+    "declarativeNetRequest",
+    "cookies"
+  ],
+  "host_permissions": [
+    "https://support.oefr-kraken.energy/*",
+    "https://octopusenergy.fr/*"
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_headers",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Récapitulatif Contrat Client",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Récapitulatif Contrat</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- En-tête -->
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-icon">🐙</span>
+        <div class="brand-text">
+          <h1 class="brand-title">Vue Espace Client</h1>
+          <span class="brand-subtitle" id="accountBadge">Détection en cours...</span>
+        </div>
+      </div>
+      <button id="refreshBtn" class="icon-button" title="Actualiser les données" aria-label="Actualiser">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
+          <path d="M23 4v6h-6"></path>
+          <path d="M1 20v-6h6"></path>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+      </button>
+    </header>
+
+    <!-- Sélecteur de contrat (si plusieurs logements/contrats) -->
+    <div id="contractSelectorContainer" class="selector-container hidden">
+      <label for="contractSelect" class="selector-label">Sélectionner un contrat :</label>
+      <select id="contractSelect" class="selector-input"></select>
+    </div>
+
+    <!-- État de chargement -->
+    <div id="loadingState" class="state-view">
+      <div class="spinner"></div>
+      <p class="state-message">Récupération des données en temps réel...</p>
+    </div>
+
+    <!-- Vue Erreur / Hors contexte -->
+    <div id="errorState" class="state-view hidden">
+      <div class="state-icon error-icon">⚠️</div>
+      <p id="errorMessage" class="state-message">Veuillez ouvrir une fiche compte sur Kraken (support.oefr-kraken.energy) ou sur l'espace client.</p>
+      <button id="syncSessionBtn" class="primary-button hidden" style="margin-top: 10px; width: 100%;">
+        <span>🚀 Synchroniser la session Espace Client</span>
+      </button>
+    </div>
+
+    <!-- Contenu principal (données du contrat) -->
+    <main id="contentState" class="content-view hidden">
+      <!-- Statut et Offre commerciale -->
+      <div class="hero-card">
+        <div class="hero-header">
+          <span id="badgeStatut" class="badge badge-success">Actif</span>
+          <span id="labelEnergie" class="badge badge-info">Électricité</span>
+        </div>
+        <h2 id="nomOffre" class="offer-title">Offre Lancement Plüm</h2>
+        <div id="codeOffre" class="offer-subtitle">EARLY_BIRD</div>
+
+        <!-- Grille des prix TTC -->
+        <div class="pricing-grid">
+          <div class="price-box">
+            <span class="price-label">Prix du kWh (TTC)</span>
+            <span id="prixKwh" class="price-value highlight-pink">-</span>
+          </div>
+          <div class="price-box">
+            <span class="price-label">Abonnement (TTC)</span>
+            <span id="prixAbonnement" class="price-value highlight-cyan">-</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section Suivi Conso Mensuel -->
+      <div id="consoCard" class="conso-card">
+        <div class="conso-card-header" id="consoToggleHeader">
+          <div class="conso-title-group">
+            <span class="conso-icon">📊</span>
+            <h3 class="conso-title">Suivi Conso Mensuel</h3>
+          </div>
+          <span id="badgeConsoStatus" class="badge badge-info">Linky</span>
+        </div>
+
+        <div id="consoContentBody" class="conso-content-body">
+          <!-- Encart Mois en cours -->
+          <div id="consoMoisEnCoursBox" class="conso-current-box">
+            <div class="conso-current-top">
+              <span class="conso-tag">Mois en cours</span>
+              <span id="consoMoisEnCoursLabel" class="conso-month-name">-</span>
+            </div>
+            <div class="conso-current-values">
+              <span id="consoMoisEnCoursKwh" class="conso-main-kwh highlight-cyan">- kWh</span>
+              <span id="consoMoisEnCoursCost" class="conso-main-cost highlight-pink">- €</span>
+            </div>
+            <div id="consoMoisEnCoursBreakdown" class="conso-breakdown-text"></div>
+            <div id="consoDerniereReleve" class="conso-last-reading"></div>
+          </div>
+
+          <!-- Liste des Mois précédents -->
+          <div id="consoMoisPrecedentsSection" class="conso-history-section">
+            <div class="conso-history-title">Mois précédents</div>
+            <div id="consoMonthsList" class="conso-months-list">
+              <!-- Rempli dynamiquement -->
+            </div>
+          </div>
+
+          <!-- Total cumulé sur la période -->
+          <div id="consoTotalBox" class="conso-total-box hidden">
+            <div class="conso-total-header">
+              <span id="consoTotalTitle" class="conso-total-title">Total cumulé</span>
+              <span id="consoTotalBadge" class="conso-total-badge">- mois</span>
+            </div>
+            <div class="conso-total-values">
+              <div class="conso-total-col left">
+                <span class="conso-total-label">Consommation</span>
+                <span id="consoTotalKwh" class="conso-total-kwh highlight-cyan">- kWh</span>
+                <span id="consoAvgKwh" class="conso-total-avg">Moy. - kWh/m</span>
+              </div>
+              <div class="conso-total-separator"></div>
+              <div class="conso-total-col right">
+                <span class="conso-total-label">Montant total</span>
+                <span id="consoTotalCost" class="conso-total-cost highlight-pink">- €</span>
+                <span id="consoAvgCost" class="conso-total-avg">Moy. - €/m</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Message si aucun relevé -->
+          <div id="consoEmptyMessage" class="conso-empty-state hidden">
+            <span>ℹ️ Relevés de consommation en attente de synchronisation.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Détails techniques et administratifs -->
+      <div class="details-card">
+        <div class="detail-row">
+          <span class="detail-label">N° PRM / Compteur</span>
+          <div class="detail-value-wrapper">
+            <span id="valeurPrm" class="detail-value mono">-</span>
+            <button id="copyPrmBtn" class="copy-button" title="Copier le PRM" aria-label="Copier le PRM">📋</button>
+          </div>
+        </div>
+
+        <div class="detail-row">
+          <span class="detail-label">Puissance souscrite</span>
+          <span id="valeurPuissance" class="detail-value">-</span>
+        </div>
+
+        <div class="detail-row">
+          <span class="detail-label">Option tarifaire</span>
+          <span id="valeurOption" class="detail-value">-</span>
+        </div>
+
+        <div class="detail-row">
+          <span class="detail-label">Compteur communicant</span>
+          <span id="valeurLinky" class="detail-value">-</span>
+        </div>
+
+        <div class="detail-row">
+          <span class="detail-label">Mode de facturation</span>
+          <span id="valeurFacturation" class="detail-value">-</span>
+        </div>
+
+        <div class="detail-row">
+          <span class="detail-label">Date d'effet / début</span>
+          <span id="valeurDebut" class="detail-value">-</span>
+        </div>
+
+        <div id="rowFinContrat" class="detail-row hidden">
+          <span class="detail-label">Date de résiliation</span>
+          <span id="valeurFin" class="detail-value text-danger">-</span>
+        </div>
+
+        <div class="detail-row address-row">
+          <span class="detail-label">Adresse du logement</span>
+          <span id="valeurAdresse" class="detail-value address-value">-</span>
+        </div>
+      </div>
+
+      <!-- Actions rapides -->
+      <div class="actions-footer">
+        <button id="copySummaryBtn" class="primary-button">
+          <span>📋 Copier tout le récapitulatif</span>
+        </button>
+        <span id="copyFeedback" class="copy-feedback hidden">Copié dans le presse-papier !</span>
+      </div>
+    </main>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
