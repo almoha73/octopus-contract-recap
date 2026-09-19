@@ -50,7 +50,7 @@ const GRAPHQL_AGREEMENTS_QUERY = `
   }
 `;
 
-const CACHE_VERSION = 6; // Synchronisé avec background.js pour l'invalidation automatique du cache local
+const CACHE_VERSION = 8; // Synchronisé avec background.js pour l'invalidation automatique du cache local
 
 document.addEventListener("DOMContentLoaded", () => {
   // Éléments du DOM
@@ -77,6 +77,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const copyPrmBtn = document.getElementById("copyPrmBtn");
   const valeurPuissance = document.getElementById("valeurPuissance");
   const valeurOption = document.getElementById("valeurOption");
+  const rowHorairesHc = document.getElementById("rowHorairesHc");
+  const valeurHorairesHc = document.getElementById("valeurHorairesHc");
   const valeurLinky = document.getElementById("valeurLinky");
   const valeurFacturation = document.getElementById("valeurFacturation");
   const valeurDebut = document.getElementById("valeurDebut");
@@ -251,9 +253,34 @@ document.addEventListener("DOMContentLoaded", () => {
   if (fullscreenBtn) {
     fullscreenBtn.addEventListener("click", async () => {
       try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        const tabIdParam = tab?.id ? `&tabId=${tab.id}` : "";
-        const accParam = currentAccountNumber ? `&account=${currentAccountNumber}` : "";
+        let activeTab = null;
+        try {
+          const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+          activeTab = t;
+        } catch (_) {}
+
+        if (!activeTab || !activeTab.id || !activeTab.url?.includes("support.oefr-kraken.energy")) {
+          try {
+            const tabs = await chrome.tabs.query({ active: true });
+            activeTab = tabs.find(t => t.url && (t.url.includes("support.oefr-kraken.energy") || t.url.includes("octopusenergy.fr"))) || activeTab;
+          } catch (_) {}
+        }
+
+        let resolvedAcc = currentAccountNumber;
+        if (!resolvedAcc && activeTab?.url) {
+          const m = activeTab.url.match(/(?:accounts|comptes)\/(A-[A-Z0-9]+)/i);
+          if (m) resolvedAcc = m[1];
+        }
+        if (!resolvedAcc) {
+          const badgeMatch = accountBadge?.textContent?.match(/A-[A-Z0-9]+/i);
+          if (badgeMatch) resolvedAcc = badgeMatch[0];
+        }
+        if (!resolvedAcc && initialAccount) {
+          resolvedAcc = initialAccount;
+        }
+
+        const tabIdParam = activeTab?.id ? `&tabId=${activeTab.id}` : "";
+        const accParam = resolvedAcc ? `&account=${resolvedAcc}` : "";
 
         await chrome.tabs.create({
           url: chrome.runtime.getURL(`popup.html?mode=fullscreen${tabIdParam}${accParam}`)
@@ -303,6 +330,16 @@ document.addEventListener("DOMContentLoaded", () => {
             contract.consoMensuelle = response.data;
             if (currentContract && String(currentContract.id) === String(contract.id)) {
               renderConsoDetails(contract.consoMensuelle);
+            }
+            if (currentAccountNumber && contractsList && contractsList.length > 0) {
+              chrome.storage.local.set({
+                [`account_cache_${currentAccountNumber}`]: {
+                  accountNumber: currentAccountNumber,
+                  contracts: contractsList,
+                  cachedAt: Date.now(),
+                  cacheVersion: CACHE_VERSION
+                }
+              }).catch(() => {});
             }
           }
         });
@@ -385,6 +422,7 @@ document.addEventListener("DOMContentLoaded", () => {
       `• PRM : ${currentContract.prm}`,
       `• Puissance : ${currentContract.puissance}`,
       `• Option : ${currentContract.optionTarifaire}`,
+      ...((currentContract.horairesHeuresCreuses || activeTabContext?.domHorairesHc) ? [`• Plages Heures Creuses : ${currentContract.horairesHeuresCreuses || activeTabContext?.domHorairesHc}`] : []),
       `• Prix du kWh TTC : ${currentContract.prixKwhTTC}`,
       `• Abonnement TTC : ${currentContract.prixAbonnementMoisTTC}`,
       `• Facturation : ${currentContract.modeFacturation}`,
@@ -410,46 +448,61 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       let tab = null;
 
-      // En mode fenêtre autonome ou plein écran, localiser l'onglet Kraken / Espace Client actif
-      if (currentMode === "window" || currentMode === "fullscreen") {
-        if (initialTabId) {
-          try {
-            const candidate = await chrome.tabs.get(initialTabId);
-            if (candidate && candidate.url && (candidate.url.includes("support.oefr-kraken.energy") || candidate.url.includes("octopusenergy.fr"))) {
-              tab = candidate;
-            }
-          } catch (_) {}
-        }
+      // 1. Détermination prioritaire du compte cible
+      let account = initialAccount || null;
 
-        if (!tab) {
-          try {
-            const activeTabs = await chrome.tabs.query({ active: true });
-            const krakenTab = activeTabs.find(t => t.url && (t.url.includes("support.oefr-kraken.energy") || t.url.includes("octopusenergy.fr")));
-            if (krakenTab) {
-              tab = krakenTab;
-            } else {
-              const allKraken = await chrome.tabs.query({ url: ["https://support.oefr-kraken.energy/*", "https://octopusenergy.fr/*"] });
-              if (allKraken.length > 0) {
-                tab = allKraken[0];
+      // 2. Recherche de l'onglet associé
+      if (initialTabId) {
+        try {
+          const candidate = await chrome.tabs.get(initialTabId);
+          if (candidate?.url && (candidate.url.includes("support.oefr-kraken.energy") || candidate.url.includes("octopusenergy.fr"))) {
+            if (!account || candidate.url.includes(account)) {
+              tab = candidate;
+              if (!account) {
+                const m = candidate.url.match(/(?:accounts|comptes)\/(A-[A-Z0-9]+)/i);
+                if (m) account = m[1];
               }
             }
-          } catch (_) {}
-        }
+          }
+        } catch (_) {}
       }
 
+      // Si le compte est spécifié dans l'URL mais tab pas encore trouvée, chercher l'onglet Kraken correspondant exactement à ce compte
+      if (!tab && account) {
+        try {
+          const allKraken = await chrome.tabs.query({ url: ["https://support.oefr-kraken.energy/*", "https://octopusenergy.fr/*"] });
+          const matchingTab = allKraken.find(t => t.url && t.url.includes(account));
+          if (matchingTab) {
+            tab = matchingTab;
+          }
+        } catch (_) {}
+      }
+
+      // En mode fenêtre autonome ou plein écran, si toujours pas de tab, chercher l'onglet Kraken actif
+      if (!tab && (currentMode === "window" || currentMode === "fullscreen")) {
+        try {
+          const activeTabs = await chrome.tabs.query({ active: true });
+          const krakenActive = activeTabs.find(t => t.url && (t.url.includes("support.oefr-kraken.energy") || t.url.includes("octopusenergy.fr")));
+          if (krakenActive) {
+            tab = krakenActive;
+            if (!account) {
+              const m = krakenActive.url.match(/(?:accounts|comptes)\/(A-[A-Z0-9]+)/i);
+              if (m) account = m[1];
+            }
+          }
+        } catch (_) {}
+      }
+
+      // En mode standard popup (ou repli) : prendre l'onglet actif de la fenêtre courante
       if (!tab) {
-        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        tab = activeTab;
+        try {
+          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          tab = activeTab;
+        } catch (_) {}
       }
 
-      if (!tab || !tab.url) {
-        showError("Impossible d'accéder à l'onglet Kraken ou Espace Client.");
-        return;
-      }
-
-      // Extraction du numéro de compte
-      let account = null;
-      if (tab?.url) {
+      // Extraction de secours du compte depuis tab si toujours non défini
+      if (!account && tab?.url) {
         const krakenMatch = tab.url.match(/accounts\/(A-[A-Z0-9]+)/i);
         const clientMatch = tab.url.match(/comptes\/(A-[A-Z0-9]+)/i);
         account = krakenMatch ? krakenMatch[1] : (clientMatch ? clientMatch[1] : null);
@@ -458,10 +511,6 @@ document.addEventListener("DOMContentLoaded", () => {
           const titleMatch = tab.title?.match(/(A-[A-Z0-9]{8,})/i);
           if (titleMatch) account = titleMatch[1];
         }
-      }
-
-      if (!account && initialAccount) {
-        account = initialAccount;
       }
 
       if (!account) {
@@ -516,15 +565,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 )];
               };
 
-              let agreementIds = getAgreements();
-              if (agreementIds.length === 0) {
-                const start = Date.now();
-                while (Date.now() - start < 1500) {
-                  await new Promise(r => setTimeout(r, 150));
-                  agreementIds = getAgreements();
-                  if (agreementIds.length > 0) break;
-                }
-              }
+              const agreementIds = getAgreements();
 
               // Extraction de tous les identifiants de propriété (logement) sur Kraken
               const propLinks = [...document.querySelectorAll('a[href*="properties/"], a[href*="property/"], [data-property-id]')];
@@ -554,11 +595,17 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
               }
 
+              // Recherche d'horaires HC visibles dans le DOM Kraken (ex: "Heures Creuses : 23h00 - 07h00")
+              const pageText = document.body.innerText || "";
+              const hcMatch = pageText.match(/(?:Heures\s+Creuses|Plage[s]?\s+HC|Horaires\s+HC|Créneaux\s+HC)\s*[:]\s*([0-9hH:\-–\s,\/]+)/i);
+              const domHorairesHc = hcMatch ? hcMatch[1].trim() : null;
+
               return {
                 agreementIds: agreementIds,
                 agreementId: agreementIds[0] || null,
                 propertyIds: propertyIds,
-                propertyMapping: propertyMapping
+                propertyMapping: propertyMapping,
+                domHorairesHc: domHorairesHc
               };
             }
           });
@@ -1207,6 +1254,16 @@ document.addEventListener("DOMContentLoaded", () => {
           if (currentContract && String(currentContract.id) === String(targetContract.id)) {
             renderConsoDetails(targetContract.consoMensuelle);
           }
+          if (currentAccountNumber && contractsList && contractsList.length > 0) {
+            chrome.storage.local.set({
+              [`account_cache_${currentAccountNumber}`]: {
+                accountNumber: currentAccountNumber,
+                contracts: contractsList,
+                cachedAt: Date.now(),
+                cacheVersion: CACHE_VERSION
+              }
+            }).catch(() => {});
+          }
         }
       });
     }
@@ -1254,6 +1311,18 @@ document.addEventListener("DOMContentLoaded", () => {
     valeurPrm.textContent = c.prm;
     valeurPuissance.textContent = c.puissance;
     valeurOption.textContent = c.optionTarifaire;
+
+    // Affichage des plages Heures Creuses si disponibles
+    const hcHoraires = c.horairesHeuresCreuses || activeTabContext?.domHorairesHc;
+    if (rowHorairesHc && valeurHorairesHc) {
+      if (hcHoraires) {
+        rowHorairesHc.classList.remove("hidden");
+        valeurHorairesHc.textContent = hcHoraires;
+      } else {
+        rowHorairesHc.classList.add("hidden");
+      }
+    }
+
     valeurLinky.textContent = c.linky;
     valeurFacturation.textContent = c.modeFacturation;
     valeurDebut.textContent = c.dateDebut || "-";
@@ -1318,17 +1387,6 @@ document.addEventListener("DOMContentLoaded", () => {
             m.kwhFormate = pt.kwhFormate;
           }
         }
-      }
-    }
-
-    // Réconciliation spécifique garantie pour Décembre 2025 (151,64 € pour emménagement du 12 décembre)
-    const allMonthsCheck = [conso.moisEnCours, ...(conso.moisPrecedents || [])].filter(Boolean);
-    for (const m of allMonthsCheck) {
-      if (m.yearMonth === "2025-12" && (m.costEur === 151.56 || m.costEur === 151.58 || !m.costEur)) {
-        m.costEur = 151.64;
-        m.costFormate = "151,64 €";
-        m.costEnergyEur = 135.39;
-        m.costAboEur = 16.25;
       }
     }
 

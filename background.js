@@ -29,7 +29,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "FETCH_CONSO_DATA") {
     const { accountNumber, prmId, propertyId, contract, propertyIds, propertyMapping } = message.payload || {};
     fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, contract, propertyMapping, propertyIds)
-      .then((data) => sendResponse({ success: true, data }))
+      .then(async (data) => {
+        if (accountNumber && data && data.hasData) {
+          try {
+            const cachedContracts = await getCachedAccount(accountNumber);
+            if (cachedContracts && Array.isArray(cachedContracts)) {
+              const matched = cachedContracts.find(c => String(c.prm) === String(prmId) || String(c.id) === String(contract?.id));
+              if (matched) {
+                matched.consoMensuelle = data;
+                await saveAccountToCache(accountNumber, cachedContracts);
+              }
+            }
+          } catch (_) {}
+        }
+        sendResponse({ success: true, data });
+      })
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
@@ -81,7 +95,7 @@ const ACCOUNT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes de validité
 const preloadCooldowns = new Map(); // accountNumber -> timestamp du dernier préchargement
 const activePreloadLocks = new Set(); // accountNumber en cours de préchargement
 
-const CACHE_VERSION = 6; // Incrémenté suite au rétablissement de l'endpoint Kraken pour purger le cache non synchronisé
+const CACHE_VERSION = 8; // Incrémenté pour inclure l'affichage des plages horaires des Heures Creuses
 
 /**
  * Récupère les données en cache local pour un compte si elles sont encore valides
@@ -249,19 +263,27 @@ async function triggerPreloadForTab(tabId, url) {
 
 // Écouteurs d'onglets pour le préchargement proactif
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === "complete" && tab?.url) {
-    triggerPreloadForTab(tabId, tab.url);
+  const url = changeInfo.url || tab?.url;
+  if (url && (changeInfo.status === "complete" || changeInfo.url)) {
+    triggerPreloadForTab(tabId, url);
   }
 });
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   try {
     const tab = await chrome.tabs.get(activeInfo.tabId);
-    if (tab?.url && tab?.status === "complete") {
+    if (tab?.url) {
       triggerPreloadForTab(activeInfo.tabId, tab.url);
     }
   } catch (_) {}
 });
+
+// Préchargement proactif immédiat au démarrage du Service Worker
+chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+  if (tab?.url) {
+    triggerPreloadForTab(tab.id, tab.url);
+  }
+}).catch(() => {});
 
 /**
  * Récupère les données complètes du contrat :
@@ -306,12 +328,20 @@ async function handleFetchContractData(payload) {
     ? agreementIds 
     : (agreementId ? [agreementId] : [null]);
 
-  // Étape 1 : Tentative directe avec les cookies de session actuels
+  // Étape 1 : Tentative directe ultra-rapide avec les cookies de session actuels
   const result = await executeAgreementsQuery(accountNumber, idsToQuery);
   if (result.contracts && result.contracts.length > 0) {
-    const enriched = await enrichContractsWithConso(result.contracts, accountNumber, propertyMapping, propertyIds);
-    await saveAccountToCache(accountNumber, enriched);
-    return enriched;
+    // RESTITUTION INSTANTANÉE : sauvegarder et retourner les contrats immédiatement (~200ms)
+    await saveAccountToCache(accountNumber, result.contracts);
+
+    // Lancement de l'enrichissement conso en tâche de fond (sans bloquer l'affichage de l'interface)
+    enrichContractsWithConso(result.contracts, accountNumber, propertyMapping, propertyIds)
+      .then(async (enriched) => {
+        await saveAccountToCache(accountNumber, enriched);
+      })
+      .catch((e) => console.warn("[Background] Erreur conso arrière-plan :", e.message));
+
+    return result.contracts;
   }
 
   // Étape 2 : Si la session n'est pas synchronisée et qu'on a le tabId de Kraken, lancer la synchronisation en arrière-plan
@@ -321,9 +351,15 @@ async function handleFetchContractData(payload) {
     try {
       const syncedContracts = await performBackgroundSync(tabId, accountNumber, idsToQuery, propertyMapping, propertyIds);
       if (syncedContracts && syncedContracts.length > 0) {
-        const enriched = await enrichContractsWithConso(syncedContracts, accountNumber, propertyMapping, propertyIds);
-        await saveAccountToCache(accountNumber, enriched);
-        return enriched;
+        await saveAccountToCache(accountNumber, syncedContracts);
+
+        enrichContractsWithConso(syncedContracts, accountNumber, propertyMapping, propertyIds)
+          .then(async (enriched) => {
+            await saveAccountToCache(accountNumber, enriched);
+          })
+          .catch((e) => console.warn("[Background] Erreur conso arrière-plan :", e.message));
+
+        return syncedContracts;
       }
     } catch (syncErr) {
       console.warn("[Background] Échec performBackgroundSync :", syncErr.message);
@@ -532,29 +568,33 @@ async function executeAgreementsQuery(accountNumber, idsToQuery) {
   const allContracts = [];
   let lastErrors = null;
 
-  for (const id of idsToQuery) {
-    try {
-      const { contracts, errors } = await queryAgreementsFromKraken(accountNumber, id);
-      if (errors) lastErrors = errors;
-      if (contracts && contracts.length > 0) {
-        allContracts.push(...contracts);
-      }
-    } catch (err) {
-      console.warn("[Background] Erreur contrat ID " + id + " :", err.message);
-      if (!lastErrors) lastErrors = [{ message: err.message }];
+  // 1. Tenter d'abord la requête globale par numéro de compte (retourne TOUS les contrats en 1 seule requête HTTP ~200ms)
+  try {
+    const { contracts, errors } = await queryAgreementsFromKraken(accountNumber, null);
+    if (errors) lastErrors = errors;
+    if (contracts && contracts.length > 0) {
+      allContracts.push(...contracts);
     }
+  } catch (err) {
+    console.warn("[Background] Requête globale compte :", err.message);
+    if (!lastErrors) lastErrors = [{ message: err.message }];
   }
 
-  if (allContracts.length === 0) {
-    try {
-      const { contracts, errors } = await queryAgreementsFromKraken(accountNumber, null);
-      if (errors) lastErrors = errors;
-      if (contracts && contracts.length > 0) {
-        allContracts.push(...contracts);
-      }
-    } catch (err) {
-      console.warn("[Background] Erreur compte global :", err.message);
-      if (!lastErrors) lastErrors = [{ message: err.message }];
+  // 2. Si 0 contrat retourné, interroger en parallèle les IDs spécifiques fournis
+  if (allContracts.length === 0 && Array.isArray(idsToQuery) && idsToQuery.length > 0 && idsToQuery[0] !== null) {
+    const results = await Promise.all(
+      idsToQuery.map(async (id) => {
+        try {
+          const { contracts, errors } = await queryAgreementsFromKraken(accountNumber, id);
+          return { contracts: contracts || [], errors };
+        } catch (err) {
+          return { contracts: [], errors: [{ message: err.message }] };
+        }
+      })
+    );
+    for (const res of results) {
+      if (res.errors) lastErrors = res.errors;
+      if (res.contracts.length > 0) allContracts.push(...res.contracts);
     }
   }
 
@@ -569,23 +609,21 @@ async function executeAgreementsQuery(accountNumber, idsToQuery) {
     }
   }
 
-  // Enrichissement automatique : si un contrat n'a pas son tarif kWh (prixKwhTTC === "-"),
-  // interroger l'API avec son agreementId spécifique pour obtenir les taux complets
-  for (let i = 0; i < uniqueContracts.length; i++) {
-    const contract = uniqueContracts[i];
-    if (contract.prixKwhTTC === "-" && contract.id) {
-      try {
-        console.log(`[Background] Contrat ${contract.id} sans tarif kWh, requête dédiée agreementId...`);
-        const { contracts: detailedList } = await queryAgreementsFromKraken(accountNumber, contract.id);
-        const detailed = detailedList?.find(c => String(c.id) === String(contract.id)) || detailedList?.[0];
-        if (detailed && detailed.prixKwhTTC && detailed.prixKwhTTC !== "-") {
-          console.log(`[Background] Tarif kWh enrichi pour contrat ${contract.id} :`, detailed.prixKwhTTC);
-          uniqueContracts[i] = detailed;
-        }
-      } catch (enrichErr) {
-        console.warn(`[Background] Échec enrichissement contrat ${contract.id} :`, enrichErr.message);
-      }
-    }
+  // Enrichissement en parallèle uniquement pour les contrats n'ayant pas de tarif kWh
+  const missingRates = uniqueContracts.filter(c => c.prixKwhTTC === "-" && c.id);
+  if (missingRates.length > 0) {
+    await Promise.all(
+      missingRates.map(async (contract) => {
+        try {
+          const { contracts: detailedList } = await queryAgreementsFromKraken(accountNumber, contract.id);
+          const detailed = detailedList?.find(c => String(c.id) === String(contract.id)) || detailedList?.[0];
+          if (detailed && detailed.prixKwhTTC && detailed.prixKwhTTC !== "-") {
+            const idx = uniqueContracts.findIndex(c => String(c.id) === String(contract.id));
+            if (idx !== -1) uniqueContracts[idx] = detailed;
+          }
+        } catch (_) {}
+      })
+    );
   }
 
   return { contracts: uniqueContracts, errors: lastErrors };
@@ -723,6 +761,18 @@ async function queryAgreementsFromKraken(accountNumber, agreementId) {
 /**
  * Formate un noeud d'accord en objet clair et exploitable pour l'interface
  */
+/**
+ * Nettoie et formate une chaîne de plages horaires (ex: "23:00 - 07:00" -> "23h00 - 07h00")
+ */
+function cleanScheduleString(str) {
+  if (!str || typeof str !== "string") return null;
+  let s = str.trim();
+  s = s.replace(/(\d{1,2}):(\d{2})/g, "$1h$2");
+  s = s.replace(/\s*[-–]\s*/g, " - ");
+  s = s.replace(/\s*[,/]\s*/g, ", ");
+  return s;
+}
+
 function formatAgreementNode(node) {
   const isElectricity = node.supplyPoint?.marketName === "FRA_ELECTRICITY";
   const meterPoint = node.supplyPoint?.meterPoint || {};
@@ -852,6 +902,42 @@ function formatAgreementNode(node) {
                  firstRateWithLabel?.temporalClass?.label || 
                  (rateNodes.length > 1 ? "Heures Pleines / Heures Creuses" : "Base");
 
+  // Extraction des plages horaires des Heures Creuses (HP/HC)
+  let horairesHeuresCreuses = null;
+  const temporalClasses = meterPoint.providerCalendar?.temporalClasses || [];
+
+  if (Array.isArray(temporalClasses) && temporalClasses.length > 0) {
+    const hcClass = temporalClasses.find(t => {
+      const lbl = (t.label || "").toLowerCase();
+      const desc = (t.description || "").toLowerCase();
+      return lbl.includes("creuse") || lbl.includes("hc") || desc.includes("creuse") || desc.includes("hc");
+    });
+    if (hcClass && hcClass.description) {
+      horairesHeuresCreuses = cleanScheduleString(hcClass.description);
+    }
+  }
+
+  if (!horairesHeuresCreuses && meterPoint.providerCalendar?.name) {
+    const calName = meterPoint.providerCalendar.name;
+    const match = calName.match(/(?:[01]?\d|2[0-3])[hH:]\d{0,2}\s*[-–/aà]\s*(?:[01]?\d|2[0-3])[hH:]\d{0,2}(?:\s*(?:,|et|\/)\s*(?:[01]?\d|2[0-3])[hH:]\d{0,2}\s*[-–/aà]\s*(?:[01]?\d|2[0-3])[hH:]\d{0,2})*/i);
+    if (match) {
+      horairesHeuresCreuses = cleanScheduleString(match[0]);
+    }
+  }
+
+  if (!horairesHeuresCreuses) {
+    for (const r of rateNodes) {
+      const slot = r.energyUseTimeSlot || r.temporalClass?.description;
+      if (slot && typeof slot === "string") {
+        const match = slot.match(/(?:[01]?\d|2[0-3])[hH:]\d{0,2}\s*[-–/aà]\s*(?:[01]?\d|2[0-3])[hH:]\d{0,2}/i);
+        if (match) {
+          horairesHeuresCreuses = cleanScheduleString(slot);
+          break;
+        }
+      }
+    }
+  }
+
   // Puissance souscrite
   const puissance = meterPoint.subscribedMaxPower ? 
                     `${meterPoint.subscribedMaxPower} kVA` : 
@@ -931,6 +1017,7 @@ function formatAgreementNode(node) {
     adresse: meterPoint.address?.fullAddress || "-",
     puissance: puissance,
     optionTarifaire: option,
+    horairesHeuresCreuses: horairesHeuresCreuses,
     prixKwhTTC: prixKwh,
     prixAbonnementMoisTTC: prixAbonnement,
     modeFacturation: node.billingFrequency === 12 ? "Annuelle" : `${node.billingFrequency || 1} mois`,
@@ -1213,11 +1300,7 @@ function parsePropertyMeasurementsMonth(edges, range, contract = null) {
       ? parseFloat(String(node.value).replace(",", "."))
       : 0;
 
-    if (range.yearMonth === "2025-12" && startDate && startDate.getDate() > 1) {
-      dayKwh = dayBilledKwh > 0 ? dayBilledKwh : rawNodeKwh;
-    } else {
-      dayKwh = (rawNodeKwh > 0) ? rawNodeKwh : dayBilledKwh;
-    }
+    dayKwh = (rawNodeKwh > 0) ? rawNodeKwh : dayBilledKwh;
 
     // Si la journée n'a aucune donnée de consommation (0 kWh et 0 €)
     if (dayKwh === 0 && dayCost === 0 && !hasStats) {
@@ -1288,23 +1371,20 @@ function parsePropertyMeasurementsMonth(edges, range, contract = null) {
   const roundedHp = Math.round(totalHpKwh * 100) / 100;
   const roundedHc = Math.round(totalHcKwh * 100) / 100;
 
-  // Réconciliation du mois de souscription / emménagement (prorata officiel de l'Espace Client Octopus) :
-  // Sur un mois débuté en cours de mois (ex: arrivée le 12 décembre), les relèves Enedis ne démarrent qu'à J+1
-  // (le 13 décembre = 19 jours de télérelève, soit 16,19 € d'abonnement relevé et 135,39 € d'énergie).
-  // L'abonnement proratisé officiel facturé et affiché par Octopus sur l'Espace Client s'élève à 16,25 € (20 jours sous contrat sur 31),
-  // portant le total officiel affiché pour Décembre 2025 à très exactement 151,64 € (135,39 € + 16,25 €).
-  if (range.yearMonth === "2025-12" && startDate && startDate.getDate() > 1) {
-    roundedEnergy = 135.39;
-    roundedAbo = 16.25;
-    roundedCost = 151.64;
-  } else if (startDate && range.yearMonth === `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}` && startDate.getDate() > 1) {
+  // Prorata d'abonnement sur le premier mois de contrat (si souscription en cours de mois)
+  if (startDate && range.yearMonth === `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}` && startDate.getDate() > 1) {
     const daysInMonth = range.daysInMonth || new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0).getDate();
     const activeDays = daysInMonth - startDate.getDate() + 1;
     if (monthlyAbo > 0) {
-      roundedAbo = Math.round(((activeDays / daysInMonth) * monthlyAbo) * 100) / 100;
-    }
-    if (roundedEnergy > 0 && roundedAbo > 0) {
-      roundedCost = Math.round((roundedEnergy + roundedAbo) * 100) / 100;
+      const proratedAbo = Math.round(((activeDays / daysInMonth) * monthlyAbo) * 100) / 100;
+      if (totalAboCost === 0) {
+        roundedAbo = proratedAbo;
+        roundedCost = Math.round((roundedEnergy + roundedAbo) * 100) / 100;
+      } else if (proratedAbo > roundedAbo) {
+        const diff = proratedAbo - roundedAbo;
+        roundedAbo = proratedAbo;
+        roundedCost = Math.round((roundedCost + diff) * 100) / 100;
+      }
     }
   }
 
@@ -1644,22 +1724,23 @@ async function enrichContractsWithConso(contracts, accountNumber, propertyMappin
     console.warn("[Background] Erreur resolvePropertyIdsForContracts :", resErr.message);
   }
 
-  for (const c of contracts) {
-    if (c.prm && c.prm !== "-") {
-      // Si la conso a déjà été validée et attachée lors de la résolution, la conserver
-      if (c.consoMensuelle && c.consoMensuelle.hasData) {
-        continue;
-      }
-      try {
-        const conso = await fetchMonthlyConsumptionData(accountNumber, c.prm, c.propertyId, c, propertyMapping, propertyIds);
-        if (conso) {
-          c.consoMensuelle = conso;
+  await Promise.all(
+    contracts.map(async (c) => {
+      if (c.prm && c.prm !== "-") {
+        if (c.consoMensuelle && c.consoMensuelle.hasData) {
+          return;
         }
-      } catch (consoErr) {
-        console.warn(`[Background] Suivi conso non disponible pour PRM ${c.prm} :`, consoErr.message);
+        try {
+          const conso = await fetchMonthlyConsumptionData(accountNumber, c.prm, c.propertyId, c, propertyMapping, propertyIds);
+          if (conso) {
+            c.consoMensuelle = conso;
+          }
+        } catch (consoErr) {
+          console.warn(`[Background] Suivi conso non disponible pour PRM ${c.prm} :`, consoErr.message);
+        }
       }
-    }
-  }
+    })
+  );
   return contracts;
 }
 
@@ -1704,37 +1785,7 @@ async function fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, con
     }
   }
 
-  // Réconciliation proactive avec la page Next.js suivi-conso si accessible
-  if (propertyId) {
-    try {
-      const pageData = await fetchSuiviConsoPageData(accountNumber, propertyId, contract);
-      if (pageData && pageData.hasData) {
-        if (!propertyConso || !propertyConso.hasData) {
-          return pageData;
-        }
-        // Si les deux sont disponibles, enrichir les montants avec les totaux officiels de la page
-        const allPage = [pageData.moisEnCours, ...(pageData.moisPrecedents || [])].filter(Boolean);
-        const allProp = [propertyConso.moisEnCours, ...(propertyConso.moisPrecedents || [])].filter(Boolean);
-
-        for (const propMonth of allProp) {
-          const matchPage = allPage.find(p => p.yearMonth === propMonth.yearMonth);
-          if (matchPage && matchPage.costEur != null && matchPage.costEur > 0) {
-            // Ne pas écraser si propMonth a déjà le coût proratisé exact du contrat (ex: 151,64 € vs 151,56 € brut)
-            if (propMonth.costEur && propMonth.costEur >= matchPage.costEur) {
-              continue;
-            }
-            propMonth.costEur = matchPage.costEur;
-            propMonth.costFormate = matchPage.costFormate || `${matchPage.costEur.toFixed(2).replace(".", ",")} €`;
-          }
-        }
-        const totCost = Math.round(allProp.reduce((s, m) => s + (m.costEur || 0), 0) * 100) / 100;
-        propertyConso.totalCostEur = totCost;
-        propertyConso.totalCostFormate = totCost > 0 ? `${totCost.toFixed(2).replace(".", ",")} €` : "-";
-        propertyConso.moyenneCost = allProp.length > 0 && totCost > 0 ? Math.round((totCost / allProp.length) * 100) / 100 : null;
-      }
-    } catch (_) {}
-  }
-
+  // Si les mesures officielles par propriété sont disponibles, retour immédiat (gain de 2 à 3 secondes)
   if (propertyConso && propertyConso.hasData) {
     return propertyConso;
   }
@@ -2101,14 +2152,6 @@ function aggregateReadingsByMonth(readingNodes, contract = null) {
 
     let finalCostEnergy = Math.round(costEnergy * 100) / 100;
     let finalCostAbo = Math.round(costAbo * 100) / 100;
-    let finalTotalCost = totalCostEur !== null ? Math.round(totalCostEur * 100) / 100 : null;
-
-    if (ym === "2025-12" && startDate && startDate.getDate() > 1) {
-      finalCostEnergy = 135.39;
-      finalCostAbo = 16.25;
-      finalTotalCost = 151.64;
-    }
-
     const d = new Date(yearNum, monthNum - 1, 1);
     const moisLabel = d.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
     const moisCourt = d.toLocaleDateString("fr-FR", { month: "short", year: "numeric" });
@@ -2281,9 +2324,6 @@ function parseMonthItem(item) {
   }
 
   let finalCost = costEur !== null ? Math.round(costEur * 100) / 100 : null;
-  if (ym === "2025-12" && (finalCost === 151.56 || finalCost === 151.58)) {
-    finalCost = 151.64;
-  }
 
   const roundedKwh = Math.round(kwh * 100) / 100;
 

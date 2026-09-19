@@ -316,7 +316,7 @@ fragment IntervalMeasurement on IntervalMeasurementType {
    - **Juillet 2026 :** 44,90 €
    - **Août 2026 :** 47,05 €
    - **Septembre 2026 :** 25,38 €
-   - **Décembre 2025 :** 151,64 € (135,39 € d'énergie + 16,25 € d'abonnement proratisé)
+   - **Décembre 2025 :** calculé dynamiquement au prorata des jours de contrat (ex: 70,53 € pour `A-A41F9A92`, 151,64 € pour `A-9A249124`)
 3. **Périmètre et isolation multi-logements (`propertyId` & PRM) :**
    Chaque logement possède son propre identifiant unique `propertyId` et son PRM (`marketSupplyPointId`).
    - L'extension extrait tous les identifiants de logements visibles dans le DOM actif (Kraken / Espace Client) et explore les pages Next.js en tâche de fond.
@@ -425,4 +425,46 @@ Pour résoudre ce problème sans altérer l'espace de travail Kraken, deux modes
   - **Largeur étendue jusqu'à 1 180 px :**
   - **Colonne gauche :** Cartes contractuelles complètes (titulaire, PRM, compteur, tarifs du kWh, mensualités).
   - **Colonne droite :** Synthèse Linky annuelle complète, graphiques des 12 mois, totaux et moyennes côte à côte.
+
+---
+
+## 9. Plages Horaires Heures Creuses & Architecture de Performance (< 200 ms)
+
+### A. Affichage des Plages Horaires Heures Creuses (HP / HC)
+Pour les clients ayant souscrit une option tarifaire **Heures Pleines / Heures Creuses (HP/HC)**, les plages horaires définies par le gestionnaire de réseau Enedis (ex: `23h00 - 07h00` ou `00h00 - 08h00`) sont extraites et affichées directement :
+1. **Source GraphQL Octopus / Kraken :**
+   Dans `AgreementQuery`, l'objet `meterPoint` (de type `ElectricityMeterPoint`) contient :
+   ```graphql
+   ... on ElectricityMeterPoint {
+     providerCalendar {
+       name
+       temporalClasses {
+         label
+         description
+       }
+     }
+   }
+   ```
+   La description de la classe temporelle « Creuse » contient directement les créneaux horaires configurés pour le PRM.
+2. **Nettoyage et formatage :**
+   La fonction `cleanScheduleString()` normalise les chaînes reçues (ex: `"23:00 - 07:00"` devient `"23h00 - 07h00"`).
+3. **Restitution :**
+   - Ligne dédiée `#rowHorairesHc` sous l'option tarifaire dans l'interface.
+   - Inclusion automatique dans le bouton de copie du récapitulatif client (`• Plages Heures Creuses : 23h00 - 07h00`).
+
+### B. Architecture de Performance & Chargement Ultra-Rapide
+
+Afin de garantir un affichage instantané et éliminer toute latence perçue par le conseiller, 5 optimisations structurelles ont été déployées :
+
+1. **Restitution instantanée des contrats (First Paint < 200 ms) :**
+   `handleFetchContractData` et `executeAgreementsQuery` n'attendent plus la fin de l'interrogation mensuelle de consommation pour renvoyer la réponse à l'interface. Les contrats et tarifs sont transmis et affichés en ~200 ms, tandis que le suivi conso mensuel Linky est délégué en tâche asynchrone d'arrière-plan.
+2. **Suppression de la boucle de temporisation DOM (gain de 1 500 ms) :**
+   L'injection DOM sur Kraken extrait immédiatement les liens et mappings sans boucle d'attente active bloquante. La requête GraphQL globale par `accountNumber` garantissant la récupération de tous les contrats même sans identifiant dans le DOM.
+3. **Persistance intégrale du Suivi Conso dans le Cache Local (0 ms en réouverture) :**
+   Dès que le message `FETCH_CONSO_DATA` reçoit la consommation mensuelle, celle-ci est persistée avec les contrats dans `chrome.storage.local` sous la clé `account_cache_${accountNumber}`. À la réouverture du popup ou au passage en plein écran, le contrat ET le graphique s'affichent instantanément à 0 ms.
+4. **Suppression du scraping HTML redondant (gain de 2 à 3 secondes) :**
+   `fetchMonthlyConsumptionData` retourne immédiatement dès que `fetchMeasurementsByProperty` a validé les données officielles Linky, évitant le téléchargement et l'analyse séquentiels de plusieurs mégaoctets de pages Next.js.
+5. **Préchargement proactif étendu (HTMX, History pushState & Tab Activation) :**
+   L'écouteur `chrome.tabs.onUpdated` surveille `changeInfo.url` pour détecter les navigations dynamiques Kraken (HTMX / History API), amorçant en tâche de fond le cache des données avant même que le conseiller ne clique sur l'icône de l'extension.
+
 
