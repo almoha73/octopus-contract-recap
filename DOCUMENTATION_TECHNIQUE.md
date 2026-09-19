@@ -303,8 +303,20 @@ fragment IntervalMeasurement on IntervalMeasurementType {
 #### Pourquoi cette requête est indispensable (Taxes et Tarifs Historiques)
 1. **Changements de taxes (ex : 1er août 2026) :**
    Une formule recalculée a posteriori avec le tarif actuel du contrat ($\text{kWh} \times \text{Tarif actuel}$) serait mathématiquement fausse pour les mois passés (ex : mai, juin, juillet 2026) car les taxes sur l'électricité ont augmenté le 1er août (hausse des accises / CSPE).
-2. **Coût TTC officiel pré-calculé (en centimes d'euro) :**
-   Le champ `metaData.statistics.costInclTax.estimatedAmount` contient le montant TTC exact calculé par Octopus Energy au jour le jour avec les barèmes et taxes applicables à la date de chaque relève. L'API GraphQL Kraken l'exprime en **centimes d'euro** (ex : `2645` c€ pour $26,45\text{ €}$, `1549.54` c€ pour l'énergie et `1095.46` c€ pour l'abonnement), converti en euros par division par 100 dans l'extension.
+2. **Coût TTC officiel pré-calculé et sommation exacte (au centime près) :**
+   Le champ `metaData.statistics.costInclTax.estimatedAmount` de `totalStat` contient le montant TTC exact calculé par Octopus Energy au jour le jour avec les barèmes et taxes applicables à la date de chaque relève. L'API GraphQL Kraken l'exprime en **centimes d'euro** (ex : `2479` c€). 
+   Octopus calcule le montant total affiché pour chaque mois en sommant les montants bruts journaliers (`totalStat.costInclTax.estimatedAmount / 100`) et en arrondissant à 2 décimales au niveau du mois complet (`Math.round(totalMonthCost * 100) / 100`).
+   L'extension applique rigoureusement cette méthode, assurant une concordance exacte au centime près sur l'intégralité des mois :
+   - **Janvier 2026 :** 247,90 €
+   - **Février 2026 :** 154,43 €
+   - **Mars 2026 :** 84,86 €
+   - **Avril 2026 :** 64,93 €
+   - **Mai 2026 :** 58,70 €
+   - **Juin 2026 :** 44,34 €
+   - **Juillet 2026 :** 44,90 €
+   - **Août 2026 :** 47,05 €
+   - **Septembre 2026 :** 25,38 €
+   - **Décembre 2025 :** 151,64 € (135,39 € d'énergie + 16,25 € d'abonnement proratisé)
 3. **Périmètre et isolation multi-logements (`propertyId` & PRM) :**
    Chaque logement possède son propre identifiant unique `propertyId` et son PRM (`marketSupplyPointId`).
    - L'extension extrait tous les identifiants de logements visibles dans le DOM actif (Kraken / Espace Client) et explore les pages Next.js en tâche de fond.
@@ -313,19 +325,32 @@ fragment IntervalMeasurement on IntervalMeasurementType {
 
 ### C. Algorithme d'Agrégation Mensuelle, Totaux et Moyennes
 
-1. **Plages mensuelles (jusqu'aux 12 derniers mois) :**
-   L'extension génère automatiquement les 12 derniers mois calendaires (le mois en cours + jusqu'aux 11 mois précédents) et interroge l'API en parallèle (`Promise.all`).  
-   - Si le contrat dispose de 12 mois ou plus d'antériorité, les **12 derniers mois complets** sont récupérés et affichés.  
-   - Si le logement a été souscrit plus récemment (ex : emménagement il y a 2 ou 4 mois), l'extension filtre automatiquement les mois sans relève et **affiche l'intégralité des mois réels disponibles**.
-2. **Mois en cours (Septembre) :**
+1. **Périmètre temporel strict du contrat (`validFrom` / `validTo`) :**
+   - **Exclusion des mois antérieurs :** L'extension vérifie la date d'effet du contrat (`contract.rawValidFrom`). Aucun mois antérieur à la souscription n'est interrogé ni affiché (par exemple, si la cliente a souscrit le 12 décembre 2025, le mois de novembre 2025 est automatiquement écarté même si le compteur physique Linky possédait des impulsions antérieures).
+   - **Exclusion des mois postérieurs :** Pour les contrats résiliés (`contract.rawValidTo`), les mois postérieurs à la résiliation sont automatiquement exclus.
+   - **Plages mensuelles (jusqu'aux 12 derniers mois éligibles) :** L'extension génère les mois calendaires éligibles (le mois en cours + jusqu'aux 11 mois précédents dans la limite de validité du contrat) et interroge l'API en parallèle (`Promise.all`).
+2. **Calcul fidèle des volumes journaliers et mensuels (Précision jusqu'à 2 décimales) :**
+   - **Mois d'emménagement (ex: Décembre 2025) :** La consommation sous contrat correspond à la somme des tranches d'énergie facturées depuis la prise d'effet (**857,7 kWh** : 550 HP + 307,7 HC).
+   - **Mois complets sous contrat :** Le champ `node.value` porte la télérelève métrologique Linky avec sa précision maximale. L'extension totalise ces valeurs au centième de kWh près (`Math.round(totalMonthKwh * 100) / 100`) et applique la fonction `formatKwhValue` :
+     - **Janvier 2026 :** 1 408,19 kWh
+     - **Février 2026 :** 833,44 kWh
+     - **Mars 2026 :** 384,67 kWh
+     - **Avril 2026 :** 274,55 kWh
+     - **Mai 2026 :** 229,97 kWh
+     - **Juin 2026 :** 144,21 kWh
+     - **Juillet 2026 :** 141,62 kWh
+     - **Août 2026 :** 144,55 kWh
+     - **Septembre 2026 :** 84,37 kWh
+     - **Décembre 2025 :** 857,7 kWh
+3. **Mois en cours (Septembre) :**
    Identifié automatiquement par `yearMonth === "2026-09"`. Affichage mis en avant avec le montant officiel TTC pré-calculé (ex : 26,45 € pour le logement 1, 19,52 € pour le logement 2), le volume en kWh, la ventilation HP/HC et la date de dernière relève reçue d'Enedis.
-3. **Historique des mois passés :**
-   Classement chronologique de tous les mois passés disponibles avec leurs montants réels en euros (ex : 44,15 € en août pour le logement 1, 90,78 € pour le logement 2), kWh consommés et barres graphiques relatives (`pct = (kwh / maxKwh) * 100`).
-4. **Calculs du Total Cumulé et des Moyennes Mensuelles :**
-   - **Total cumulé :** Somme de tous les kWh d'un côté (cyan) et somme de tous les montants en euros de l'autre (rose), sur l'ensemble des mois affichés ($N$ mois).
+4. **Historique des mois passés :**
+   Classement chronologique de tous les mois passés disponibles avec leurs montants réels en euros (ex : 151,64 € en décembre, 44,15 € en août pour le logement 1), kWh consommés et barres graphiques relatives (`pct = (kwh / maxKwh) * 100`).
+5. **Calculs du Total Cumulé et des Moyennes Mensuelles :**
+   - **Total cumulé :** Somme de tous les kWh d'un côté (cyan) et somme de tous les montants en euros de l'autre (rose), sur l'ensemble des mois affichés ($N$ mois réels du contrat).
    - **Moyenne mensuelle :** $\frac{\text{Total kWh}}{N}$ et $\frac{\text{Total Euros TTC}}{N}$, calculées dynamiquement en fonction du nombre réel de mois disponibles pour le logement sélectionné.
-5. **Replis automatiques (Fallbacks) :**
-   Si `GetPropertyMeasurements` n'est pas encore provisionné pour un nouveau contrat, l'extension bascule de manière transparente sur `electricityReading` (pagination Relay Linky) ou la page Next.js `suivi-conso`.
+6. **Replis automatiques (Fallbacks) :**
+   Si `GetPropertyMeasurements` n'est pas encore provisionné pour un nouveau contrat, l'extension bascule de manière transparente sur `electricityReading` (pagination Relay Linky) ou la page Next.js `suivi-conso`, en appliquant les mêmes filtres temporels stricts (`validFrom` / `validTo`).
 
 ### D. Préchargement Proactif en Tâche de Fond & Stratégie Cache-First (Affichage 0 ms)
 
