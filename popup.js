@@ -56,6 +56,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // Éléments du DOM
   const accountBadge = document.getElementById("accountBadge");
   const refreshBtn = document.getElementById("refreshBtn");
+  const detachBtn = document.getElementById("detachBtn");
+  const fullscreenBtn = document.getElementById("fullscreenBtn");
   const contractSelectorContainer = document.getElementById("contractSelectorContainer");
   const contractSelect = document.getElementById("contractSelect");
 
@@ -106,6 +108,20 @@ document.addEventListener("DOMContentLoaded", () => {
   const copyFeedback = document.getElementById("copyFeedback");
   const syncSessionBtn = document.getElementById("syncSessionBtn");
 
+  // Détection du mode d'affichage (fenêtre autonome flottante ou plein écran)
+  const urlParams = new URLSearchParams(window.location.search);
+  const currentMode = urlParams.get("mode"); // "window" | "fullscreen" | null
+  const initialAccount = urlParams.get("account");
+  const initialTabId = urlParams.get("tabId") ? parseInt(urlParams.get("tabId"), 10) : null;
+
+  if (currentMode === "window") {
+    document.body.classList.add("mode-window");
+    document.title = "🐙 Octopus Contract Recap - Fenêtre Compagnon";
+  } else if (currentMode === "fullscreen") {
+    document.body.classList.add("mode-fullscreen");
+    document.title = "🐙 Octopus & Kraken - Dashboard Contrat";
+  }
+
   let currentAccountNumber = null;
   let contractsList = [];
   let currentContract = null;
@@ -118,6 +134,138 @@ document.addEventListener("DOMContentLoaded", () => {
   refreshBtn.addEventListener("click", () => {
     loadData(true);
   });
+
+  // Événement d'ouverture en Fenêtre Compagnon Autonome (Option 1)
+  if (detachBtn) {
+    detachBtn.addEventListener("click", async () => {
+      try {
+        let activeTab = null;
+        try {
+          const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+          activeTab = t;
+        } catch (_) {}
+
+        if (!activeTab || !activeTab.id) {
+          try {
+            const tabs = await chrome.tabs.query({ active: true });
+            activeTab = tabs.find(t => t.url && (t.url.includes("support.oefr-kraken.energy") || t.url.includes("octopusenergy.fr"))) || tabs[0];
+          } catch (_) {}
+        }
+
+        const badgeMatch = accountBadge?.textContent?.match(/A-[A-Z0-9]+/i);
+        const resolvedAcc = currentAccountNumber || (badgeMatch ? badgeMatch[0] : null) || initialAccount || "";
+
+        const tabIdParam = activeTab?.id ? `&tabId=${activeTab.id}` : "";
+        const accParam = resolvedAcc ? `&account=${resolvedAcc}` : "";
+        const targetUrl = chrome.runtime.getURL(`popup.html?mode=window${tabIdParam}${accParam}`);
+
+        const winWidth = 520;
+        const winHeight = 850;
+        const availW = (window.screen && window.screen.availWidth) ? Math.floor(window.screen.availWidth) : 1440;
+        const leftPos = Math.max(0, Math.floor(availW - winWidth - 30));
+        const topPos = 50;
+
+        let opened = false;
+
+        // 1. Tentative via le Service Worker d'arrière-plan (indépendant du cycle de vie du popup)
+        try {
+          const bgResp = await new Promise((resolve) => {
+            chrome.runtime.sendMessage(
+              {
+                type: "OPEN_COMPANION_WINDOW",
+                payload: {
+                  url: targetUrl,
+                  width: winWidth,
+                  height: winHeight,
+                  left: leftPos,
+                  top: topPos
+                }
+              },
+              (res) => {
+                if (chrome.runtime.lastError) {
+                  resolve({ success: false, error: chrome.runtime.lastError.message });
+                } else {
+                  resolve(res || { success: false });
+                }
+              }
+            );
+          });
+          if (bgResp?.success) {
+            opened = true;
+          }
+        } catch (bgErr) {
+          console.warn("[Popup] Erreur lors de la demande d'ouverture au service worker :", bgErr);
+        }
+
+        // 2. Tentative directe avec chrome.windows.create si le service worker n'a pas répondu
+        if (!opened && chrome?.windows?.create) {
+          try {
+            await chrome.windows.create({
+              url: targetUrl,
+              type: "popup",
+              width: winWidth,
+              height: winHeight,
+              left: leftPos,
+              top: topPos,
+              focused: true
+            });
+            opened = true;
+          } catch (winErr) {
+            console.warn("[Popup] chrome.windows.create type:popup échoué, essai type:normal :", winErr.message);
+            try {
+              await chrome.windows.create({
+                url: targetUrl,
+                type: "normal",
+                width: winWidth,
+                height: winHeight,
+                left: leftPos,
+                top: topPos,
+                focused: true
+              });
+              opened = true;
+            } catch (_) {}
+          }
+        }
+
+        // 3. Repli universel standard navigateur (window.open)
+        if (!opened) {
+          try {
+            const winFeatures = `width=${winWidth},height=${winHeight},left=${leftPos},top=${topPos},resizable=yes,scrollbars=yes`;
+            const popupWin = window.open(targetUrl, "OctopusCompanionWindow", winFeatures);
+            if (popupWin) {
+              opened = true;
+            }
+          } catch (_) {}
+        }
+
+        if (opened && currentMode !== "window") {
+          window.close();
+        }
+      } catch (err) {
+        console.error("[Popup] Erreur lors du détachement en fenêtre autonome :", err);
+      }
+    });
+  }
+
+  // Événement d'ouverture en Plein Écran / Dashboard (Option 4)
+  if (fullscreenBtn) {
+    fullscreenBtn.addEventListener("click", async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tabIdParam = tab?.id ? `&tabId=${tab.id}` : "";
+        const accParam = currentAccountNumber ? `&account=${currentAccountNumber}` : "";
+
+        await chrome.tabs.create({
+          url: chrome.runtime.getURL(`popup.html?mode=fullscreen${tabIdParam}${accParam}`)
+        });
+        if (currentMode !== "window") {
+          window.close();
+        }
+      } catch (err) {
+        console.warn("[Popup] Erreur ouverture plein écran :", err.message);
+      }
+    });
+  }
 
   // Événement de synchronisation manuelle
   if (syncSessionBtn) {
@@ -260,21 +408,60 @@ document.addEventListener("DOMContentLoaded", () => {
    */
   async function loadData(forceRefresh = false) {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      let tab = null;
+
+      // En mode fenêtre autonome ou plein écran, localiser l'onglet Kraken / Espace Client actif
+      if (currentMode === "window" || currentMode === "fullscreen") {
+        if (initialTabId) {
+          try {
+            const candidate = await chrome.tabs.get(initialTabId);
+            if (candidate && candidate.url && (candidate.url.includes("support.oefr-kraken.energy") || candidate.url.includes("octopusenergy.fr"))) {
+              tab = candidate;
+            }
+          } catch (_) {}
+        }
+
+        if (!tab) {
+          try {
+            const activeTabs = await chrome.tabs.query({ active: true });
+            const krakenTab = activeTabs.find(t => t.url && (t.url.includes("support.oefr-kraken.energy") || t.url.includes("octopusenergy.fr")));
+            if (krakenTab) {
+              tab = krakenTab;
+            } else {
+              const allKraken = await chrome.tabs.query({ url: ["https://support.oefr-kraken.energy/*", "https://octopusenergy.fr/*"] });
+              if (allKraken.length > 0) {
+                tab = allKraken[0];
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (!tab) {
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        tab = activeTab;
+      }
 
       if (!tab || !tab.url) {
-        showError("Impossible d'accéder à l'onglet actif.");
+        showError("Impossible d'accéder à l'onglet Kraken ou Espace Client.");
         return;
       }
 
       // Extraction du numéro de compte
-      const krakenMatch = tab.url.match(/accounts\/(A-[A-Z0-9]+)/i);
-      const clientMatch = tab.url.match(/comptes\/(A-[A-Z0-9]+)/i);
-      let account = krakenMatch ? krakenMatch[1] : (clientMatch ? clientMatch[1] : null);
+      let account = null;
+      if (tab?.url) {
+        const krakenMatch = tab.url.match(/accounts\/(A-[A-Z0-9]+)/i);
+        const clientMatch = tab.url.match(/comptes\/(A-[A-Z0-9]+)/i);
+        account = krakenMatch ? krakenMatch[1] : (clientMatch ? clientMatch[1] : null);
 
-      if (!account && tab.url.includes("support.oefr-kraken.energy")) {
-        const titleMatch = tab.title?.match(/(A-[A-Z0-9]{8,})/i);
-        if (titleMatch) account = titleMatch[1];
+        if (!account && tab.url.includes("support.oefr-kraken.energy")) {
+          const titleMatch = tab.title?.match(/(A-[A-Z0-9]{8,})/i);
+          if (titleMatch) account = titleMatch[1];
+        }
+      }
+
+      if (!account && initialAccount) {
+        account = initialAccount;
       }
 
       if (!account) {
@@ -1315,5 +1502,34 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => {
       copyFeedback.classList.add("hidden");
     }, 2000);
+  }
+
+  // En mode fenêtre autonome : synchronisation dynamique automatique dès que le conseiller change d'onglet sur Kraken
+  if (currentMode === "window") {
+    let syncDebounceTimer = null;
+    const handleTabChange = async () => {
+      clearTimeout(syncDebounceTimer);
+      syncDebounceTimer = setTimeout(async () => {
+        try {
+          const allTabs = await chrome.tabs.query({ active: true });
+          const krakenTab = allTabs.find(t => t.url && (t.url.includes("support.oefr-kraken.energy") || t.url.includes("octopusenergy.fr")));
+          if (krakenTab?.url) {
+            const m = krakenTab.url.match(/(?:accounts|comptes)\/(A-[A-Z0-9]+)/i);
+            const newAcc = m ? m[1] : null;
+            if (newAcc && newAcc !== currentAccountNumber) {
+              console.log(`[Fenêtre Compagnon] Changement de compte détecté dans Kraken (${newAcc}), actualisation automatique...`);
+              loadData(false);
+            }
+          }
+        } catch (_) {}
+      }, 350);
+    };
+
+    chrome.tabs.onActivated.addListener(handleTabChange);
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+      if (changeInfo.status === "complete" && tab.url && (tab.url.includes("support.oefr-kraken.energy") || tab.url.includes("octopusenergy.fr"))) {
+        handleTabChange();
+      }
+    });
   }
 });

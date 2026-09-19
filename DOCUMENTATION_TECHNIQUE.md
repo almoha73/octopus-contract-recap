@@ -379,3 +379,50 @@ Ce développement respecte 100 % des consignes de sécurité d'entreprise défin
    - Aucune télémétrie externe ni tracker.
    - Les données de diagnostic copiables en cas d'erreur ne contiennent **aucune donnée personnelle (zéro PII)** : uniquement des codes de produit et des valeurs numériques de tarification.
 4. **Vérification de l'expéditeur :** Tous les écouteurs de messages vérifient formellement `sender.id === chrome.runtime.id`.
+
+---
+
+## 8. Ergonomie & Modes d'Affichage : Fenêtre Compagnon Flottante & Plein Écran
+
+À mesure que l'extension intègre de nouvelles fonctionnalités à forte valeur ajoutée (historique complet des factures, échéanciers de paiement, suivi Linky multi-compteurs, détails contractuels avancés), le format de popup Chrome par défaut (**800 × 600 px**) atteint ses limites ergonomiques :
+1. **Fermeture intempestive au moindre clic externe :** Le popup natif de Chrome disparaît dès que le conseiller clique dans Kraken ou dans un autre logiciel (CRM, téléphonie, messagerie).
+2. **Incompatibilité du panneau latéral Chrome (*Side Panel*) :** L'interface Kraken Support dispose déjà d'une barre de navigation à gauche et d'une colonne chronologique à droite. L'ouverture d'un panneau latéral Chrome écrasait horizontalement le viewport Kraken, obligeant le conseiller à scroller de gauche à droite.
+
+Pour résoudre ce problème sans altérer l'espace de travail Kraken, deux modes d'affichage complémentaires ont été conçus :
+
+### A. Option 1 (Recommandée) : La Fenêtre Compagnon Flottante (« ⧉ Détacher »)
+
+- **Fonctionnement :**
+  Un clic sur le bouton **« ⧉ Détacher »** dans le bandeau de l'extension ouvre instantanément une fenêtre Chrome dédiée autonome :
+  ```javascript
+  chrome.windows.create({
+    url: chrome.runtime.getURL(`popup.html?mode=window&tabId=${tab.id}&account=${account}`),
+    type: "popup",
+    width: 500,
+    height: 850,
+    left: Math.max(0, (screen.availWidth || 1440) - 520),
+    top: 50,
+    focused: true
+  });
+  ```
+- **Avantages clés pour le conseiller :**
+  - **Ne se ferme jamais :** La fenêtre reste ouverte même si le conseiller clique dans Kraken, prend un appel ou tape des notes.
+  - **Idéale pour le multi-écrans :** Peut être glissée sur un 2ème écran ou ancrée sur le côté droit de l'écran à côté de la fenêtre Kraken.
+  - **Zéro encombrement sur Kraken :** La page Kraken conserve 100 % de sa largeur et ses deux panneaux latéraux d'origine.
+  - **Synchronisation dynamique en temps réel :**
+    Lorsque le conseiller passe à un autre onglet ou ouvre un nouveau compte client dans Kraken (`A-XXXXXXXX`), la fenêtre compagnon détecte l'événement via `chrome.tabs.onActivated` et `chrome.tabs.onUpdated` et **actualise automatiquement les données sans que le conseiller n'ait à cliquer nulle part**.
+
+### B. Option 4 : Le Mode Plein Écran Dashboard (« ⛶ Plein écran »)
+
+- **Fonctionnement :**
+  Un clic sur le bouton **« ⛶ Plein écran »** ouvre l'extension dans un onglet standard de Chrome :
+  ```javascript
+  chrome.tabs.create({
+    url: chrome.runtime.getURL(`popup.html?mode=fullscreen&account=${account}`)
+  });
+  ```
+- **Mise en page optimisée (Grille 2 Colonnes Responsive) :**
+  - **Largeur étendue jusqu'à 1 180 px :**
+  - **Colonne gauche :** Cartes contractuelles complètes (titulaire, PRM, compteur, tarifs du kWh, mensualités).
+  - **Colonne droite :** Synthèse Linky annuelle complète, graphiques des 12 mois, totaux et moyennes côte à côte.
+

@@ -44,6 +44,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Réponse synchrone : ne pas retourner true
     return false;
   }
+
+  // Ouverture d'une fenêtre compagnon autonome (Option 1)
+  if (message.type === "OPEN_COMPANION_WINDOW") {
+    const { url, width = 520, height = 850, left = 0, top = 50 } = message.payload || {};
+    const winOpts = {
+      url: url || chrome.runtime.getURL("popup.html?mode=window"),
+      type: "popup",
+      width: Math.floor(Number(width) || 520),
+      height: Math.floor(Number(height) || 850),
+      left: Math.floor(Number(left) || 0),
+      top: Math.floor(Number(top) || 50),
+      focused: true
+    };
+
+    if (chrome.windows && chrome.windows.create) {
+      chrome.windows.create(winOpts)
+        .then((win) => sendResponse({ success: true, windowId: win.id }))
+        .catch((err) => {
+          console.warn("[Background] Erreur windows.create popup, repli type normal :", err.message);
+          winOpts.type = "normal";
+          chrome.windows.create(winOpts)
+            .then((win2) => sendResponse({ success: true, windowId: win2.id }))
+            .catch((err2) => sendResponse({ success: false, error: err2.message }));
+        });
+      return true;
+    } else {
+      sendResponse({ success: false, error: "chrome.windows non supporté" });
+      return false;
+    }
+  }
 });
 
 // Constantes et état de cache / préchargement

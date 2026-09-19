@@ -73,13 +73,19 @@ body {
   font-family: var(--font-mono);
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .icon-button {
   background: var(--bg-card-subtle);
   border: 1px solid var(--border-color);
   color: var(--text-muted);
   border-radius: var(--radius-sm);
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -90,7 +96,18 @@ body {
 .icon-button:hover {
   color: var(--text-main);
   border-color: var(--accent-pink);
-  transform: rotate(45deg);
+  background: rgba(255, 0, 102, 0.12);
+  transform: translateY(-1px);
+}
+
+#refreshBtn:hover {
+  transform: rotate(180deg);
+}
+
+.icon-button.active {
+  color: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+  background: rgba(0, 240, 255, 0.12);
 }
 
 /* Sélecteur de contrat */
@@ -698,5 +715,75 @@ body {
   width: 1px;
   height: 46px;
   background: rgba(255, 255, 255, 0.12);
+}
+
+/* ========================================================
+   Mode Fenêtre Autonome Flottante (Option 1)
+   ======================================================== */
+body.mode-window {
+  width: 100% !important;
+  min-height: 100vh;
+  background-color: var(--bg-main);
+  overflow-y: auto;
+}
+
+body.mode-window .app-container {
+  max-width: 520px;
+  margin: 0 auto;
+  min-height: 100vh;
+  padding: 18px 22px;
+}
+
+body.mode-window #detachBtn {
+  display: none;
+}
+
+/* ========================================================
+   Mode Plein Écran / Dashboard Dédié (Option 4)
+   ======================================================== */
+body.mode-fullscreen {
+  width: 100% !important;
+  min-height: 100vh;
+  background-color: var(--bg-main);
+  overflow-y: auto;
+}
+
+body.mode-fullscreen .app-container {
+  max-width: 1180px;
+  margin: 0 auto;
+  min-height: 100vh;
+  padding: 24px 32px;
+  gap: 20px;
+}
+
+body.mode-fullscreen #detachBtn,
+body.mode-fullscreen #fullscreenBtn {
+  display: none;
+}
+
+@media (min-width: 860px) {
+  body.mode-fullscreen .content-view {
+    display: grid;
+    grid-template-columns: 400px 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+
+  body.mode-fullscreen .hero-card {
+    grid-column: 1;
+  }
+
+  body.mode-fullscreen .details-card {
+    grid-column: 1;
+  }
+
+  body.mode-fullscreen .conso-card {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  body.mode-fullscreen .actions-group {
+    grid-column: 1 / span 2;
+  }
 }
 
