@@ -79,6 +79,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const valeurOption = document.getElementById("valeurOption");
   const rowHorairesHc = document.getElementById("rowHorairesHc");
   const valeurHorairesHc = document.getElementById("valeurHorairesHc");
+  const copyHorairesHcBtn = document.getElementById("copyHorairesHcBtn");
   const valeurLinky = document.getElementById("valeurLinky");
   const valeurFacturation = document.getElementById("valeurFacturation");
   const valeurDebut = document.getElementById("valeurDebut");
@@ -109,6 +110,85 @@ document.addEventListener("DOMContentLoaded", () => {
   const copySummaryBtn = document.getElementById("copySummaryBtn");
   const copyFeedback = document.getElementById("copyFeedback");
   const syncSessionBtn = document.getElementById("syncSessionBtn");
+
+  // Rend le prix du kWh de façon lisible : une ligne propre par tarif (HC / HP / autres)
+  function renderPrixKwh(container, valeur) {
+    if (!container) return;
+    container.textContent = "";
+    container.classList.remove("price-value-multi");
+
+    const tarifs = String(valeur || "-")
+      .split("|")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
+
+    if (tarifs.length <= 1) {
+      container.textContent = valeur || "-";
+      return;
+    }
+
+    container.classList.add("price-value-multi");
+    for (const tarif of tarifs) {
+      const line = document.createElement("span");
+      line.className = "price-line";
+
+      const separatorIndex = tarif.indexOf(":");
+      if (separatorIndex > -1) {
+        const label = document.createElement("span");
+        label.className = "price-line-label";
+        label.textContent = tarif.slice(0, separatorIndex).trim();
+
+        const value = document.createElement("span");
+        value.className = "price-line-value";
+        value.textContent = tarif.slice(separatorIndex + 1).trim();
+
+        line.append(label, value);
+      } else {
+        line.classList.add("price-line-value");
+        line.textContent = tarif;
+      }
+
+      container.appendChild(line);
+    }
+  }
+
+  // Normalise les plages Heures Creuses brutes en une liste de plages homogènes ("0h58 – 5h58")
+  function parseHcSchedule(valeur) {
+    const raw = String(valeur || "").trim();
+    if (!raw) return [];
+    return raw
+      .replace(/(\d{1,2})\s*[hH]\s*(\d{2})/g, "$1h$2")
+      .split(/\s*[;,/]\s*/)
+      .map((part) => part.replace(/\s*[-–]\s*/g, " – ").trim())
+      .filter((part) => part.length > 0);
+  }
+
+  // Rend les plages Heures Creuses de façon lisible : tout sur une seule ligne
+  function renderHcSchedule(container, valeur) {
+    if (!container) return;
+    container.textContent = "";
+    container.classList.remove("hc-value-inline");
+
+    const plages = parseHcSchedule(valeur);
+    if (plages.length === 0) {
+      container.textContent = "-";
+      return;
+    }
+
+    container.classList.add("hc-value-inline");
+    plages.forEach((plage, index) => {
+      if (index > 0) {
+        const separator = document.createElement("span");
+        separator.className = "hc-separator";
+        separator.textContent = " · ";
+        container.appendChild(separator);
+      }
+      const line = document.createElement("span");
+      line.className = "hc-line";
+      line.textContent = plage;
+      container.appendChild(line);
+    });
+  }
 
   // Détection du mode d'affichage (fenêtre autonome flottante ou plein écran)
   const urlParams = new URLSearchParams(window.location.search);
@@ -352,6 +432,17 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!currentContract || !currentContract.prm || currentContract.prm === "-") return;
     navigator.clipboard.writeText(currentContract.prm).then(() => {
       showCopyFeedback("N° PRM copié !");
+    });
+  });
+
+  // Copie des plages Heures Creuses
+  copyHorairesHcBtn.addEventListener("click", () => {
+    const hcHoraires = currentContract?.horairesHeuresCreuses || activeTabContext?.domHorairesHc;
+    if (!hcHoraires) return;
+    const plages = parseHcSchedule(hcHoraires);
+    const texte = plages.length > 0 ? plages.join(" · ") : hcHoraires;
+    navigator.clipboard.writeText(texte).then(() => {
+      showCopyFeedback("Plages Heures Creuses copiées !");
     });
   });
 
@@ -1288,16 +1379,7 @@ document.addEventListener("DOMContentLoaded", () => {
     nomOffre.textContent = c.nomOffre;
     codeOffre.textContent = c.codeProduit ? `Code : ${c.codeProduit}` : "";
 
-    prixKwh.textContent = c.prixKwhTTC;
-    if (c.prixKwhTTC && c.prixKwhTTC.length > 13) {
-      prixKwh.style.fontSize = "11px";
-      prixKwh.style.lineHeight = "1.3";
-      prixKwh.style.wordBreak = "break-word";
-    } else {
-      prixKwh.style.fontSize = "";
-      prixKwh.style.lineHeight = "";
-      prixKwh.style.wordBreak = "";
-    }
+    renderPrixKwh(prixKwh, c.prixKwhTTC);
 
     if (c.prixKwhTTC === "-") {
       prixKwh.title = "Tarif kWh non renseigné. Cliquez pour copier le diagnostic.";
@@ -1317,7 +1399,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (rowHorairesHc && valeurHorairesHc) {
       if (hcHoraires) {
         rowHorairesHc.classList.remove("hidden");
-        valeurHorairesHc.textContent = hcHoraires;
+        renderHcSchedule(valeurHorairesHc, hcHoraires);
       } else {
         rowHorairesHc.classList.add("hidden");
       }

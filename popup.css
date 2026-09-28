@@ -54,10 +54,16 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+}
+
+.brand-text {
+  min-width: 0;
 }
 
 .brand-icon {
   font-size: 24px;
+  flex: 0 0 auto;
 }
 
 .brand-title {
@@ -65,12 +71,17 @@ body {
   font-weight: 700;
   color: var(--text-main);
   letter-spacing: -0.2px;
+  white-space: nowrap;
 }
 
 .brand-subtitle {
+  display: block;
   font-size: 11px;
   color: var(--text-muted);
   font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .header-actions {
@@ -134,6 +145,8 @@ body {
   font-size: 12px;
   outline: none;
   cursor: pointer;
+  width: 100%;
+  max-width: 100%;
 }
 
 .selector-input:focus {
@@ -164,6 +177,8 @@ body {
   letter-spacing: 0.5px;
   padding: 3px 8px;
   border-radius: 20px;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .badge-success {
@@ -211,7 +226,7 @@ body {
 /* Grille des prix */
 .pricing-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 10px;
   margin-top: 6px;
   padding-top: 10px;
@@ -238,6 +253,36 @@ body {
 .price-value {
   font-size: 16px;
   font-weight: 800;
+  line-height: 1.35;
+}
+
+/* Prix kWh multi-tarifs (HC / HP) : une ligne par tarif */
+.price-value-multi {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 13px;
+}
+
+.price-value-multi .price-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.price-line-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.price-line-value {
+  font-weight: 800;
+  font-family: var(--font-mono);
 }
 
 .highlight-pink {
@@ -246,6 +291,20 @@ body {
 
 .highlight-cyan {
   color: var(--accent-cyan);
+}
+
+/* Plages Heures Creuses : tout sur une seule ligne */
+.hc-value-inline {
+  display: inline;
+  white-space: nowrap;
+}
+
+.hc-value-inline .hc-line {
+  font-variant-numeric: tabular-nums;
+}
+
+.hc-value-inline .hc-separator {
+  color: var(--text-muted);
 }
 
 /* Carte Détails */
@@ -259,9 +318,10 @@ body {
 }
 
 .detail-row {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
+  gap: 10px;
   padding: 8px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
@@ -270,37 +330,63 @@ body {
   border-bottom: none;
 }
 
-.detail-row.address-row {
+.detail-row.address-row,
+.detail-row.hc-row,
+.detail-row.stacked-row {
+  display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
 }
 
+.detail-row.stacked-row .detail-value,
+.detail-row.hc-row .detail-value,
+.detail-row.address-row .detail-value {
+  text-align: left;
+}
+
+.detail-row.stacked-row .detail-value-wrapper,
+.detail-row.hc-row .detail-value-wrapper {
+  justify-content: flex-start;
+}
+
 .detail-label {
   font-size: 12px;
   color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .detail-value {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-main);
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .detail-value.mono {
   font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .detail-value.address-value {
   font-size: 11px;
   color: #ddd;
   line-height: 1.4;
+  text-align: left;
 }
 
 .detail-value-wrapper {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
+  min-width: 0;
+}
+
+.detail-value-wrapper .detail-value {
+  text-align: right;
 }
 
 .copy-button {
@@ -423,16 +509,20 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px 10px;
+  flex-wrap: wrap;
 }
 
 .conso-title-group {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .conso-icon {
   font-size: 14px;
+  flex: 0 0 auto;
 }
 
 .conso-title {
@@ -440,6 +530,7 @@ body {
   font-weight: 700;
   color: var(--text-main);
   letter-spacing: -0.2px;
+  white-space: nowrap;
 }
 
 .conso-content-body {
@@ -482,7 +573,8 @@ body {
 .conso-current-values {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 4px 10px;
 }
 
 .conso-main-kwh {
@@ -784,6 +876,62 @@ body.mode-fullscreen #fullscreenBtn {
 
   body.mode-fullscreen .actions-group {
     grid-column: 1 / span 2;
+  }
+}
+
+/* ========================================================
+   Fenêtre étroite (popup de l'extension)
+   ======================================================== */
+@media (max-width: 400px) {
+  .app-container {
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .hero-card {
+    padding: 14px;
+  }
+
+  .offer-title {
+    font-size: 16px;
+  }
+
+  .offer-subtitle {
+    font-size: 10px;
+  }
+
+  .pricing-grid {
+    gap: 8px;
+  }
+
+  .price-box {
+    padding: 9px;
+  }
+
+  .price-label {
+    font-size: 9px;
+  }
+
+  .conso-card {
+    padding: 12px;
+  }
+
+  .details-card {
+    padding: 10px 14px;
+  }
+
+  .detail-label,
+  .detail-value {
+    font-size: 11.5px;
+  }
+
+  .icon-button {
+    width: 28px;
+    height: 28px;
+  }
+
+  .header-actions {
+    gap: 4px;
   }
 }
 
