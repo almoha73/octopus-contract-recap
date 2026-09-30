@@ -804,9 +804,10 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (_) {}
       }
 
-      // En mode fenêtre autonome ou plein écran, si toujours pas de tab, chercher l'onglet Kraken actif
+      // En mode fenêtre autonome ou plein écran, si toujours pas de tab, chercher parmi tous les onglets Kraken
       if (!tab && (currentMode === "window" || currentMode === "fullscreen")) {
         try {
+          // D'abord chercher parmi les actifs
           const activeTabs = await chrome.tabs.query({ active: true });
           const krakenActive = activeTabs.find(t => t.url && (t.url.includes("support.oefr-kraken.energy") || t.url.includes("octopusenergy.fr")));
           if (krakenActive) {
@@ -817,6 +818,21 @@ document.addEventListener("DOMContentLoaded", () => {
             }
           }
         } catch (_) {}
+
+        // Si toujours pas trouvé (onglet Kraken non actif car le fullscreen a pris le focus), chercher parmi tous les onglets
+        if (!tab) {
+          try {
+            const allKraken = await chrome.tabs.query({ url: ["https://support.oefr-kraken.energy/*", "https://octopusenergy.fr/*"] });
+            if (allKraken.length > 0) {
+              // Privilégier celui qui contient le compte si on le connaît
+              tab = (account ? allKraken.find(t => t.url.includes(account)) : null) || allKraken[0];
+              if (!account) {
+                const m = tab.url.match(/(?:accounts|comptes)\/(A-[A-Z0-9]+)/i);
+                if (m) account = m[1];
+              }
+            }
+          } catch (_) {}
+        }
       }
 
       // En mode standard popup (ou repli) : prendre l'onglet actif de la fenêtre courante
@@ -913,7 +929,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     propertyMapping.push({
                       propertyId: pId,
                       agreementId: agId || null,
-                      prm: prmMatch ? prmMatch[0] : null
+                      prm: prmMatch ? prmMatch[0].replace(/[\u2068\u2069\u200E\u200F\u202A-\u202E]/g, "") : null
                     });
                     break;
                   }
@@ -925,6 +941,24 @@ document.addEventListener("DOMContentLoaded", () => {
               const pageText = document.body.innerText || "";
               const hcMatch = pageText.match(/(?:Heures\s+Creuses|Plage[s]?\s+HC|Horaires\s+HC|Créneaux\s+HC)\s*[:]\s*([0-9hH:\-–\s,\/]+)/i);
               const domHorairesHc = hcMatch ? hcMatch[1].trim() : null;
+
+              // Fallback PRM : si aucun PRM trouvé via propertyMapping, chercher dans le texte de la page
+              // Nettoyage des caractères Unicode directionnels (LRI, PDI) qui entourent les PRM sur Kraken
+              const cleanText = pageText.replace(/[\u2068\u2069\u200E\u200F\u202A-\u202E]/g, "");
+              let fallbackPrmFromPage = null;
+              const hasPrmInMapping = propertyMapping.some(m => m.prm && /^\d{14}$/.test(m.prm));
+              if (!hasPrmInMapping) {
+                const prmPageMatch = cleanText.match(/(\d{14})/);
+                if (prmPageMatch) {
+                  fallbackPrmFromPage = prmPageMatch[1];
+                  // L'ajouter au propertyMapping pour que le fallback SGE fonctionne
+                  propertyMapping.push({
+                    propertyId: null,
+                    agreementId: null,
+                    prm: fallbackPrmFromPage
+                  });
+                }
+              }
 
               return {
                 agreementIds: agreementIds,
@@ -1029,7 +1063,10 @@ document.addEventListener("DOMContentLoaded", () => {
               const errorMsg = response?.error || "Impossible de charger les données du contrat pour ce compte.";
 
               // Même si le contrat échoue, tenter SGE si un PRM est visible sur la page
+              console.log("[Popup] Erreur contrat, tentative fallback SGE...");
               let fallbackPrm = null;
+
+              // D'abord chercher dans le propertyMapping existant
               if (activeTabContext?.propertyMapping) {
                 for (const mapping of activeTabContext.propertyMapping) {
                   if (mapping.prm && /^\d{14}$/.test(mapping.prm)) {
@@ -1038,6 +1075,34 @@ document.addEventListener("DOMContentLoaded", () => {
                   }
                 }
               }
+
+              // Si pas trouvé, ré-injecter un script dans TOUS les frames de l'onglet Kraken
+              if (!fallbackPrm && tab?.id) {
+                try {
+                  console.log("[Popup] Ré-injection PRM — tab.id:", tab.id, "tab.url:", tab.url);
+                  const prmResults = await chrome.scripting.executeScript({
+                    target: { tabId: tab.id, allFrames: true },
+                    func: () => {
+                      const raw = document.body.innerText || "";
+                      const text = raw.replace(/[\u2068\u2069\u200E\u200F\u202A-\u202E]/g, "");
+                      const match = text.match(/(\d{14})/);
+                      return match ? match[1] : null;
+                    }
+                  });
+                  // Consolider les résultats de tous les frames
+                  for (const frame of prmResults) {
+                    if (frame?.result) {
+                      fallbackPrm = frame.result;
+                      console.log("[Popup] PRM trouvé via ré-injection (frame) :", fallbackPrm);
+                      break;
+                    }
+                  }
+                } catch (injectErr) {
+                  console.warn("[Popup] Échec ré-injection PRM :", injectErr.message);
+                }
+              }
+
+              console.log("[Popup] fallbackPrm final:", fallbackPrm);
 
               if (fallbackPrm) {
                 showError(errorMsg + "\nDonnées SGE disponibles ci-dessous.", response?.authRequired);
