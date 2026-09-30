@@ -831,6 +831,240 @@ body.mode-window #detachBtn {
 }
 
 /* ========================================================
+   Section Données SGE Enedis
+   ======================================================== */
+.sge-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sge-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 10px;
+  flex-wrap: wrap;
+}
+
+.sge-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sge-icon {
+  font-size: 14px;
+  flex: 0 0 auto;
+}
+
+.sge-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+  letter-spacing: -0.2px;
+  white-space: nowrap;
+}
+
+.sge-content-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Encart Alimentation */
+.sge-alim-box {
+  background: var(--bg-card-subtle);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sge-alim-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sge-alim-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  color: var(--accent-cyan);
+}
+
+.sge-alim-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+}
+
+.sge-alim-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sge-alim-item:first-child {
+  grid-column: 1 / -1;
+}
+
+.sge-alim-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.sge-alim-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+/* Encart Compteur & Disjoncteur */
+.sge-comptage-box {
+  background: var(--bg-card-subtle);
+  border: 1px solid rgba(255, 0, 102, 0.2);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sge-comptage-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sge-comptage-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-pink);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sge-comptage-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+}
+
+.sge-comptage-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sge-comptage-label {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.sge-comptage-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.sge-comptage-value.mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.sge-comptage-separator {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 2px 0;
+}
+
+.sge-comptage-item-full {
+  grid-column: 1 / -1;
+}
+
+.sge-formula-value {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+/* Message vide SGE */
+.sge-empty-state {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+/* Bouton Sync SGE */
+.sge-sync-button {
+  width: 100%;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, #1a0a3e 0%, #2d1470 100%);
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  border-radius: var(--radius-md);
+  color: var(--accent-cyan);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.sge-sync-button:hover {
+  background: linear-gradient(135deg, #2d1470 0%, #3d1a90 100%);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 16px rgba(0, 240, 255, 0.15);
+  transform: translateY(-1px);
+}
+
+.sge-sync-button:active {
+  transform: translateY(0);
+}
+
+.sge-sync-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.sge-sync-button.loading span::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(0, 240, 255, 0.3);
+  border-top-color: var(--accent-cyan);
+  border-radius: 50%;
+  animation: sge-spin 0.6s linear infinite;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+@keyframes sge-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ========================================================
    Mode Plein Écran / Dashboard Dédié (Option 4)
    ======================================================== */
 body.mode-fullscreen {
@@ -874,6 +1108,10 @@ body.mode-fullscreen #fullscreenBtn {
     grid-row: 1 / span 2;
   }
 
+  body.mode-fullscreen .sge-card {
+    grid-column: 1 / span 2;
+  }
+
   body.mode-fullscreen .actions-group {
     grid-column: 1 / span 2;
   }
@@ -913,6 +1151,10 @@ body.mode-fullscreen #fullscreenBtn {
   }
 
   .conso-card {
+    padding: 12px;
+  }
+
+  .sge-card {
     padding: 12px;
   }
 

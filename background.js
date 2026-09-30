@@ -3,6 +3,28 @@
  * Conforme Manifest V3 et politiques d'entreprise strictes.
  */
 
+// Clic sur l'icône de l'extension : ouvrir directement en plein écran dans un onglet adjacent
+chrome.action.onClicked.addListener(async (tab) => {
+  try {
+    let account = null;
+    if (tab?.url) {
+      const m = tab.url.match(/(?:accounts|comptes)\/(A-[A-Z0-9]+)/i);
+      if (m) account = m[1];
+    }
+    const tabIdParam = tab?.id ? `&tabId=${tab.id}` : "";
+    const accParam = account ? `&account=${account}` : "";
+    const createOpts = {
+      url: chrome.runtime.getURL(`popup.html?mode=fullscreen${tabIdParam}${accParam}`)
+    };
+    if (tab?.index !== undefined) {
+      createOpts.index = tab.index + 1;
+    }
+    await chrome.tabs.create(createOpts);
+  } catch (err) {
+    console.warn("[Background] Erreur ouverture plein écran :", err.message);
+  }
+});
+
 // Écouteur de messages sécurisé
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Vérification stricte de l'origine : le message doit provenir de notre propre extension
@@ -87,6 +109,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: false, error: "chrome.windows non supporté" });
       return false;
     }
+  }
+
+  // Récupération des données techniques SGE Enedis pour un PRM
+  if (message.type === "FETCH_SGE_DATA") {
+    handleFetchSgeData(message.payload)
+      .then((data) => sendResponse({ success: true, data }))
+      .catch((err) => {
+        sendResponse({
+          success: false,
+          error: err.message || "Erreur lors de la récupération des données SGE",
+          authRequired: !!err.authRequired
+        });
+      });
+    return true;
   }
 });
 
@@ -2339,3 +2375,403 @@ function parseMonthItem(item) {
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Données SGE Enedis — Récupération des données techniques du compteur
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SGE_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes de validité pour les données SGE (stables)
+const SGE_API_BASE = "https://mfa.microapps.enedis.fr/prm/api/v1";
+
+/**
+ * Récupère les données techniques SGE (alimentation + comptage) pour un PRM donné.
+ * Stratégie : ouvre un onglet temporaire sur sge.enedis.fr, y injecte un fetch first-party
+ * vers les APIs microapps Enedis (cookies SameSite envoyés), puis ferme l'onglet.
+ * @param {Object} payload - { prm: string, bypassCache?: boolean }
+ * @returns {Promise<Object>} Données SGE formatées
+ */
+async function handleFetchSgeData(payload) {
+  const { prm, bypassCache } = payload || {};
+
+  if (!prm || !/^\d{14}$/.test(String(prm))) {
+    throw new Error("PRM invalide ou manquant (14 chiffres attendus)");
+  }
+
+  // 1. Vérification du cache SGE local
+  if (!bypassCache) {
+    try {
+      const cacheKey = `sge_cache_${prm}`;
+      const stored = await chrome.storage.local.get([cacheKey]);
+      const cached = stored[cacheKey];
+      if (cached && cached.data && (Date.now() - (cached.cachedAt || 0)) < SGE_CACHE_TTL_MS) {
+        console.log(`[Background SGE] ⚡ Cache SGE valide pour PRM ${prm} (${Math.round((Date.now() - cached.cachedAt) / 1000)}s)`);
+        return cached.data;
+      }
+    } catch (cErr) {
+      console.warn("[Background SGE] Erreur lecture cache SGE :", cErr.message);
+    }
+  }
+
+  // 2. Ouvrir un onglet temporaire SGE (silencieux, en arrière-plan)
+  let sgeTabId = null;
+  const sgeUrl = `https://sge.enedis.fr/prm?wc=consultation&id=${prm}`;
+
+  try {
+    const sgeTab = await chrome.tabs.create({ url: sgeUrl, active: false });
+    sgeTabId = sgeTab.id;
+    console.log(`[Background SGE] Onglet SGE créé (tabId=${sgeTabId}) pour PRM ${prm}`);
+  } catch (tabErr) {
+    throw new Error("Impossible d'ouvrir un onglet SGE : " + tabErr.message);
+  }
+
+  try {
+    // 3. Attendre que l'onglet SGE soit complètement chargé
+    await waitForTabComplete(sgeTabId, 15000);
+
+    // Vérifier que la page a bien chargé SGE et non une page de login
+    let tabInfo;
+    try {
+      tabInfo = await chrome.tabs.get(sgeTabId);
+    } catch (_) {
+      throw new Error("Onglet SGE fermé avant la fin du chargement");
+    }
+
+    const tabUrl = tabInfo.url || "";
+    if (!tabUrl.includes("sge.enedis.fr")) {
+      // Probablement redirigé vers une page de login
+      const err = new Error("Session SGE expirée. Veuillez vous reconnecter à SGE puis réessayer.");
+      err.authRequired = true;
+      throw err;
+    }
+
+    // 4. Injecter un script dans le contexte first-party SGE pour appeler les APIs
+    const RESULT_ELEMENT_ID = "__ext_sge_result__";
+
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: sgeTabId },
+        world: "MAIN",
+        func: (prmId, apiBase, resultId) => {
+          const fetchApi = async (endpoint) => {
+            const url = `${apiBase}/${endpoint}/${prmId}`;
+            const res = await fetch(url, {
+              method: "GET",
+              credentials: "include",
+              headers: { "Accept": "application/json" }
+            });
+            if (!res.ok) {
+              throw new Error(`HTTP ${res.status} pour ${endpoint}`);
+            }
+            return res.json();
+          };
+
+          Promise.all([
+            fetchApi("situation-alimentation").catch(e => ({ error: e.message })),
+            fetchApi("situation-comptage").catch(e => ({ error: e.message })),
+            fetchApi("situations-contractuelles").catch(e => ({ error: e.message }))
+          ]).then(([alimentation, comptage, contractuel]) => {
+            const result = { alimentation, comptage, contractuel, done: true };
+            let el = document.getElementById(resultId);
+            if (!el) {
+              el = document.createElement("div");
+              el.id = resultId;
+              el.style.display = "none";
+              document.documentElement.appendChild(el);
+            }
+            el.textContent = JSON.stringify(result);
+          }).catch(err => {
+            let el = document.getElementById(resultId);
+            if (!el) {
+              el = document.createElement("div");
+              el.id = resultId;
+              el.style.display = "none";
+              document.documentElement.appendChild(el);
+            }
+            el.textContent = JSON.stringify({ error: err.message || String(err), done: true });
+          });
+        },
+        args: [String(prm), SGE_API_BASE, RESULT_ELEMENT_ID]
+      });
+    } catch (scriptErr) {
+      throw new Error("Injection SGE échouée : " + scriptErr.message);
+    }
+
+    // 5. Attendre le résultat dans le DOM (polling)
+    let rawResult = null;
+    const maxWaitMs = 12000;
+    const pollIntervalMs = 300;
+    const startPoll = Date.now();
+
+    while (Date.now() - startPoll < maxWaitMs) {
+      try {
+        const [readRes] = await chrome.scripting.executeScript({
+          target: { tabId: sgeTabId },
+          func: (resultId) => {
+            const el = document.getElementById(resultId);
+            if (!el || !el.textContent) return null;
+            try { return JSON.parse(el.textContent); } catch (_) { return null; }
+          },
+          args: [RESULT_ELEMENT_ID]
+        });
+        if (readRes?.result?.done) {
+          rawResult = readRes.result;
+          break;
+        }
+      } catch (_) {
+        break;
+      }
+      await new Promise(r => setTimeout(r, pollIntervalMs));
+    }
+
+    // Nettoyage du DOM (best effort)
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: sgeTabId },
+        func: (resultId) => { const el = document.getElementById(resultId); if (el) el.remove(); },
+        args: [RESULT_ELEMENT_ID]
+      });
+    } catch (_) {}
+
+    if (!rawResult) {
+      throw new Error("Timeout SGE : aucune réponse après " + maxWaitMs + "ms");
+    }
+
+    if (rawResult.error) {
+      throw new Error("Erreur SGE : " + rawResult.error);
+    }
+
+    // 6. Formater les données SGE
+    const formatted = formatSgeData(rawResult.alimentation, rawResult.comptage, rawResult.contractuel, prm);
+
+    // 7. Mettre en cache
+    try {
+      const cacheKey = `sge_cache_${prm}`;
+      await chrome.storage.local.set({
+        [cacheKey]: {
+          prm: prm,
+          data: formatted,
+          cachedAt: Date.now()
+        }
+      });
+      console.log(`[Background SGE] ✅ Données SGE mises en cache pour PRM ${prm}`);
+    } catch (_) {}
+
+    return formatted;
+
+  } finally {
+    // Fermeture garantie de l'onglet SGE
+    if (sgeTabId) {
+      try { await chrome.tabs.remove(sgeTabId); } catch (_) {}
+      console.log(`[Background SGE] Onglet SGE fermé (tabId=${sgeTabId})`);
+    }
+  }
+}
+
+/**
+ * Attend qu'un onglet soit complètement chargé (status="complete")
+ * @param {number} tabId
+ * @param {number} timeoutMs
+ */
+function waitForTabComplete(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const done = () => {
+      if (!resolved) {
+        resolved = true;
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve();
+      }
+    };
+
+    const onUpdated = (tId, changeInfo) => {
+      if (tId === tabId && changeInfo.status === "complete") {
+        done();
+      }
+    };
+
+    chrome.tabs.onUpdated.addListener(onUpdated);
+
+    // Vérifier si déjà complete
+    chrome.tabs.get(tabId).then(tab => {
+      if (tab.status === "complete") done();
+    }).catch(() => done());
+
+    // Timeout de sécurité
+    setTimeout(done, timeoutMs);
+  });
+}
+
+/**
+ * Formate les données brutes des APIs SGE en un objet structuré pour le popup
+ */
+function formatSgeData(alimentation, comptage, contractuel, prm) {
+  const result = {
+    prm: prm,
+    hasData: false,
+    // Alimentation
+    etatAlimentation: null,
+    etatAlimentationCode: null,
+    domaineTension: null,
+    tensionLivraison: null,
+    puissanceRaccordement: null,
+    puissanceRaccordementUnite: null,
+    puissanceRaccordementFormate: null,
+    // Comptage
+    typeCompteur: null,
+    teleoperable: null,
+    eligiblePeriodeMobile: null,
+    periodiciteReleve: null,
+    // Compteur
+    numeroSerie: null,
+    nbFils: null,
+    nbFilsLabel: null,
+    tensionCompteur: null,
+    intensiteNominale: null,
+    // Disjoncteur
+    calibreDisjoncteur: null,
+    intensiteReglage: null,
+    intensiteReglageFormate: null,
+    disjAccessible: null,
+    // Heures Creuses
+    plagesHc: null,
+    plagesHcFormatees: null,
+    // Situations contractuelles
+    puissanceSouscrite: null,
+    puissanceSouscriteFormate: null,
+    puissanceCoupure: null,
+    puissanceCoupureFormate: null,
+    calendrierFournisseur: null,
+    calendrierFournisseurCode: null,
+    formuleTarifaire: null,
+    formuleTarifaireCode: null
+  };
+
+  // Traitement de la situation d'alimentation
+  if (alimentation && !alimentation.error) {
+    result.hasData = true;
+
+    if (alimentation.etatAlimentation) {
+      result.etatAlimentation = alimentation.etatAlimentation.libelle || alimentation.etatAlimentation.code || "-";
+      result.etatAlimentationCode = alimentation.etatAlimentation.code || null;
+    }
+
+    if (alimentation.alimentationPrincipale) {
+      const ap = alimentation.alimentationPrincipale;
+
+      if (ap.domaineTension) {
+        result.domaineTension = ap.domaineTension.libelle || ap.domaineTension.code || "-";
+      }
+
+      result.tensionLivraison = ap.tensionLivraison || "-";
+
+      if (ap.puissanceRaccordementSoutirage) {
+        const p = ap.puissanceRaccordementSoutirage;
+        result.puissanceRaccordement = p.valeur;
+        result.puissanceRaccordementUnite = p.unite || "kVA";
+        result.puissanceRaccordementFormate = `${p.valeur} ${p.unite || "kVA"}`;
+      }
+    }
+  }
+
+  // Traitement de la situation de comptage
+  if (comptage && !comptage.error) {
+    result.hasData = true;
+
+    if (comptage.dispositifComptage) {
+      const dc = comptage.dispositifComptage;
+      if (dc.typeComptage) {
+        result.typeCompteur = dc.typeComptage.libelle || dc.typeComptage.code || "-";
+      }
+      result.teleoperable = dc.teleoperable;
+      result.eligiblePeriodeMobile = dc.eligiblePeriodeMobile;
+    }
+
+    if (comptage.caracteristiquesReleve && comptage.caracteristiquesReleve.periodicite) {
+      result.periodiciteReleve = comptage.caracteristiquesReleve.periodicite.libelle ||
+                                  comptage.caracteristiquesReleve.periodicite.code || "-";
+    }
+
+    // Premier compteur (principal)
+    if (comptage.compteurs && comptage.compteurs.length > 0) {
+      const compteur = comptage.compteurs[0];
+      result.numeroSerie = compteur.numeroSerie || "-";
+      result.nbFils = compteur.nbFils;
+      // 2 fils = monophasé, 4 fils = triphasé
+      result.nbFilsLabel = compteur.nbFils === 2 ? "Monophasé (2 fils)"
+                         : compteur.nbFils === 4 ? "Triphasé (4 fils)"
+                         : compteur.nbFils ? `${compteur.nbFils} fils` : "-";
+
+      if (compteur.tension) {
+        result.tensionCompteur = compteur.tension.libelle || compteur.tension.code || "-";
+      }
+
+      if (compteur.intensiteNominale) {
+        result.intensiteNominale = compteur.intensiteNominale.libelle || compteur.intensiteNominale.code || "-";
+      }
+    }
+
+    // Disjoncteur
+    if (comptage.disjoncteur) {
+      const disj = comptage.disjoncteur;
+      result.disjAccessible = disj.accessibilite;
+
+      if (disj.calibre) {
+        result.calibreDisjoncteur = disj.calibre.libelle || disj.calibre.code || "-";
+      }
+
+      if (disj.intensiteReglage) {
+        result.intensiteReglage = disj.intensiteReglage.valeur;
+        result.intensiteReglageFormate = `${disj.intensiteReglage.valeur} ${disj.intensiteReglage.unite || "A"}`;
+      }
+    }
+
+    // Heures Creuses (relais)
+    if (comptage.relais && comptage.relais.plageHeuresCreuses) {
+      result.plagesHc = comptage.relais.plageHeuresCreuses;
+      // Nettoyage du format "HC (1H32-7H02;14H32-17H02)" → "1h32 – 7h02 · 14h32 – 17h02"
+      let raw = comptage.relais.plageHeuresCreuses;
+      // Retirer le préfixe "HC (" et le ")" final
+      raw = raw.replace(/^HC\s*\(\s*/i, "").replace(/\s*\)\s*$/, "");
+      // Séparer les plages et formater
+      const plages = raw.split(";").map(p => {
+        return p.trim()
+          .replace(/(\d{1,2})[hH](\d{2})/g, "$1h$2")
+          .replace(/\s*-\s*/g, " – ");
+      });
+      result.plagesHcFormatees = plages.join(" · ");
+    }
+  }
+
+  // Traitement des situations contractuelles
+  if (contractuel && !contractuel.error) {
+    // L'API retourne un tableau : prendre la première entrée (contrat actif le plus récent)
+    const entries = Array.isArray(contractuel) ? contractuel : [contractuel];
+    const entry = entries[0];
+
+    if (entry && entry.structureTarifaire) {
+      result.hasData = true;
+      const st = entry.structureTarifaire;
+
+      if (st.puissanceSouscrite) {
+        result.puissanceSouscrite = st.puissanceSouscrite.valeur;
+        result.puissanceSouscriteFormate = `${st.puissanceSouscrite.valeur} ${st.puissanceSouscrite.unite || "kVA"}`;
+      }
+
+      if (st.puissanceCoupure) {
+        result.puissanceCoupure = st.puissanceCoupure.valeur;
+        result.puissanceCoupureFormate = `${st.puissanceCoupure.valeur} ${st.puissanceCoupure.unite || "kVA"}`;
+      }
+
+      if (st.grilleFournisseur && st.grilleFournisseur.calendrier) {
+        result.calendrierFournisseur = st.grilleFournisseur.calendrier.libelle || st.grilleFournisseur.calendrier.code || "-";
+        result.calendrierFournisseurCode = st.grilleFournisseur.calendrier.code || null;
+      }
+
+      if (st.formuleTarifaireAcheminement) {
+        result.formuleTarifaire = st.formuleTarifaireAcheminement.libelle || st.formuleTarifaireAcheminement.code || "-";
+        result.formuleTarifaireCode = st.formuleTarifaireAcheminement.code || null;
+      }
+    }
+  }
+
+  return result;
+}

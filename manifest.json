@@ -18,7 +18,9 @@
   ],
   "host_permissions": [
     "https://support.oefr-kraken.energy/*",
-    "https://octopusenergy.fr/*"
+    "https://octopusenergy.fr/*",
+    "https://sge.enedis.fr/*",
+    "https://mfa.microapps.enedis.fr/*"
   ],
   "declarative_net_request": {
     "rule_resources": [
@@ -30,7 +32,6 @@
     ]
   },
   "action": {
-    "default_popup": "popup.html",
     "default_title": "Récapitulatif Contrat Client",
     "default_icon": {
       "16": "icons/icon16.png",

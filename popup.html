@@ -170,7 +170,7 @@
         </div>
 
         <div id="rowHorairesHc" class="detail-row hc-row hidden">
-          <span class="detail-label">Plages Heures Creuses</span>
+          <span class="detail-label">Plages HC (Espace Client)</span>
           <div class="detail-value-wrapper">
             <span id="valeurHorairesHc" class="detail-value highlight-cyan">-</span>
             <button id="copyHorairesHcBtn" class="copy-button" title="Copier les plages Heures Creuses" aria-label="Copier les plages Heures Creuses">📋</button>
@@ -200,6 +200,145 @@
         <div class="detail-row address-row">
           <span class="detail-label">Adresse du logement</span>
           <span id="valeurAdresse" class="detail-value address-value">-</span>
+        </div>
+      </div>
+
+      <!-- Section Données SGE Enedis -->
+      <div id="sgeCard" class="sge-card">
+        <div class="sge-card-header" id="sgeToggleHeader">
+          <div class="sge-title-group">
+            <span class="sge-icon">⚡</span>
+            <h3 class="sge-title">Données SGE Enedis</h3>
+          </div>
+          <span id="badgeSgeStatus" class="badge badge-info">En attente</span>
+        </div>
+
+        <div id="sgeContentBody" class="sge-content-body">
+          <!-- Encart Alimentation -->
+          <div id="sgeAlimBox" class="sge-alim-box hidden">
+            <div class="sge-alim-header">
+              <span class="sge-alim-tag">Alimentation</span>
+              <span id="sgeEtatAlim" class="badge badge-success">-</span>
+            </div>
+            <div class="sge-alim-grid">
+              <div class="sge-alim-item">
+                <span class="sge-alim-label">Puissance de raccordement</span>
+                <span id="sgePuissanceRaccordement" class="sge-alim-value highlight-cyan">-</span>
+              </div>
+              <div class="sge-alim-item">
+                <span class="sge-alim-label">Tension de livraison</span>
+                <span id="sgeTensionLivraison" class="sge-alim-value">-</span>
+              </div>
+              <div class="sge-alim-item">
+                <span class="sge-alim-label">Domaine de tension</span>
+                <span id="sgeDomaineTension" class="sge-alim-value">-</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Encart Compteur & Disjoncteur -->
+          <div id="sgeComptageBox" class="sge-comptage-box hidden">
+            <div class="sge-comptage-section">
+              <div class="sge-comptage-title">Disjoncteur</div>
+              <div class="sge-comptage-grid">
+                <div class="sge-comptage-item">
+                  <span class="sge-comptage-label">Calibre</span>
+                  <span id="sgeCalibre" class="sge-comptage-value highlight-pink">-</span>
+                </div>
+                <div class="sge-comptage-item">
+                  <span class="sge-comptage-label">Intensité de réglage</span>
+                  <span id="sgeIntensiteReglage" class="sge-comptage-value highlight-pink">-</span>
+                </div>
+                <div class="sge-comptage-item">
+                  <span class="sge-comptage-label">Accessibilité</span>
+                  <span id="sgeDisjAccessible" class="sge-comptage-value">-</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="sge-comptage-separator"></div>
+
+            <div class="sge-comptage-section">
+              <div class="sge-comptage-title">Compteur</div>
+              <div class="sge-comptage-grid">
+                <div class="sge-comptage-item">
+                  <span class="sge-comptage-label">Type</span>
+                  <span id="sgeTypeCompteur" class="sge-comptage-value">-</span>
+                </div>
+                <div class="sge-comptage-item">
+                  <span class="sge-comptage-label">Téléopérable</span>
+                  <span id="sgeTeleoperable" class="sge-comptage-value">-</span>
+                </div>
+                <div class="sge-comptage-item">
+                  <span class="sge-comptage-label">N° série</span>
+                  <span id="sgeNumeroSerie" class="sge-comptage-value mono">-</span>
+                </div>
+                <div class="sge-comptage-item">
+                  <span class="sge-comptage-label">Nb fils</span>
+                  <span id="sgeNbFils" class="sge-comptage-value">-</span>
+                </div>
+                <div class="sge-comptage-item">
+                  <span class="sge-comptage-label">Tension</span>
+                  <span id="sgeTensionCompteur" class="sge-comptage-value">-</span>
+                </div>
+                <div class="sge-comptage-item">
+                  <span class="sge-comptage-label">Intensité nominale</span>
+                  <span id="sgeIntensiteNominale" class="sge-comptage-value">-</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="sge-comptage-separator"></div>
+
+            <div class="sge-comptage-section">
+              <div class="sge-comptage-title">Relevé & Heures Creuses</div>
+              <div class="sge-comptage-grid">
+                <div class="sge-comptage-item">
+                  <span class="sge-comptage-label">Périodicité relevé</span>
+                  <span id="sgePeriodicite" class="sge-comptage-value">-</span>
+                </div>
+                <div id="sgeHcRow" class="sge-comptage-item hidden">
+                  <span class="sge-comptage-label">Plages HC (Enedis)</span>
+                  <span id="sgePlagesHc" class="sge-comptage-value highlight-cyan">-</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Encart Situation Contractuelle -->
+          <div id="sgeContractuelBox" class="sge-comptage-box hidden">
+            <div class="sge-comptage-section">
+              <div class="sge-comptage-title">Situation Contractuelle</div>
+              <div class="sge-comptage-grid">
+                <div class="sge-comptage-item">
+                  <span class="sge-comptage-label">Puissance souscrite</span>
+                  <span id="sgePuissanceSouscrite" class="sge-comptage-value highlight-cyan">-</span>
+                </div>
+                <div class="sge-comptage-item">
+                  <span class="sge-comptage-label">Puissance de coupure</span>
+                  <span id="sgePuissanceCoupure" class="sge-comptage-value highlight-cyan">-</span>
+                </div>
+                <div class="sge-comptage-item">
+                  <span class="sge-comptage-label">Calendrier fournisseur</span>
+                  <span id="sgeCalendrier" class="sge-comptage-value">-</span>
+                </div>
+                <div class="sge-comptage-item sge-comptage-item-full">
+                  <span class="sge-comptage-label">Formule tarifaire d'acheminement</span>
+                  <span id="sgeFormuleTarifaire" class="sge-comptage-value sge-formula-value">-</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Message si aucune donnée SGE -->
+          <div id="sgeEmptyMessage" class="sge-empty-state">
+            <span>ℹ️ Cliquez sur le bouton ci-dessous pour récupérer les données depuis SGE.</span>
+          </div>
+
+          <!-- Bouton de synchronisation SGE -->
+          <button id="syncSgeBtn" class="sge-sync-button">
+            <span>⚡ Récupérer les données SGE</span>
+          </button>
         </div>
       </div>
 

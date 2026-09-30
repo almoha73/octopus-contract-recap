@@ -107,6 +107,38 @@ document.addEventListener("DOMContentLoaded", () => {
   const consoEmptyMessage = document.getElementById("consoEmptyMessage");
   const badgeConsoStatus = document.getElementById("badgeConsoStatus");
 
+  // Éléments du bloc SGE Enedis
+  const sgeCard = document.getElementById("sgeCard");
+  const badgeSgeStatus = document.getElementById("badgeSgeStatus");
+  const sgeAlimBox = document.getElementById("sgeAlimBox");
+  const sgeEtatAlim = document.getElementById("sgeEtatAlim");
+  const sgePuissanceRaccordement = document.getElementById("sgePuissanceRaccordement");
+  const sgeTensionLivraison = document.getElementById("sgeTensionLivraison");
+  const sgeDomaineTension = document.getElementById("sgeDomaineTension");
+  const sgeComptageBox = document.getElementById("sgeComptageBox");
+  const sgeCalibre = document.getElementById("sgeCalibre");
+  const sgeIntensiteReglage = document.getElementById("sgeIntensiteReglage");
+  const sgeDisjAccessible = document.getElementById("sgeDisjAccessible");
+  const sgeTypeCompteur = document.getElementById("sgeTypeCompteur");
+  const sgeTeleoperable = document.getElementById("sgeTeleoperable");
+  const sgeNumeroSerie = document.getElementById("sgeNumeroSerie");
+  const sgeNbFils = document.getElementById("sgeNbFils");
+  const sgeTensionCompteur = document.getElementById("sgeTensionCompteur");
+  const sgeIntensiteNominale = document.getElementById("sgeIntensiteNominale");
+  const sgePeriodicite = document.getElementById("sgePeriodicite");
+  const sgeHcRow = document.getElementById("sgeHcRow");
+  const sgePlagesHc = document.getElementById("sgePlagesHc");
+  const sgeContractuelBox = document.getElementById("sgeContractuelBox");
+  const sgePuissanceSouscrite = document.getElementById("sgePuissanceSouscrite");
+  const sgePuissanceCoupure = document.getElementById("sgePuissanceCoupure");
+  const sgeCalendrier = document.getElementById("sgeCalendrier");
+  const sgeFormuleTarifaire = document.getElementById("sgeFormuleTarifaire");
+  const sgeEmptyMessage = document.getElementById("sgeEmptyMessage");
+  const syncSgeBtn = document.getElementById("syncSgeBtn");
+
+  // État SGE courant pour le récapitulatif
+  let currentSgeData = null;
+
   const copySummaryBtn = document.getElementById("copySummaryBtn");
   const copyFeedback = document.getElementById("copyFeedback");
   const syncSessionBtn = document.getElementById("syncSessionBtn");
@@ -361,10 +393,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const tabIdParam = activeTab?.id ? `&tabId=${activeTab.id}` : "";
         const accParam = resolvedAcc ? `&account=${resolvedAcc}` : "";
-
-        await chrome.tabs.create({
+        const createOpts = {
           url: chrome.runtime.getURL(`popup.html?mode=fullscreen${tabIdParam}${accParam}`)
-        });
+        };
+        if (activeTab?.index !== undefined) {
+          createOpts.index = activeTab.index + 1;
+        }
+        await chrome.tabs.create(createOpts);
         if (currentMode !== "window") {
           window.close();
         }
@@ -446,6 +481,180 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  // Bouton de synchronisation SGE Enedis
+  if (syncSgeBtn) {
+    syncSgeBtn.addEventListener("click", () => {
+      if (!currentContract || !currentContract.prm || currentContract.prm === "-") {
+        if (badgeSgeStatus) {
+          badgeSgeStatus.textContent = "PRM manquant";
+          badgeSgeStatus.className = "badge badge-warning";
+        }
+        return;
+      }
+      fetchSgeForCurrentContract(currentContract.prm, true);
+    });
+  }
+
+  /**
+   * Récupère les données SGE pour le PRM donné et met à jour l'interface
+   * @param {string} prm - Le numéro PRM (14 chiffres)
+   * @param {boolean} bypassCache - Si true, ignore le cache
+   */
+  function fetchSgeForCurrentContract(prm, bypassCache = false) {
+    if (!prm || prm === "-") return;
+
+    // État de chargement
+    if (badgeSgeStatus) {
+      badgeSgeStatus.textContent = "Chargement...";
+      badgeSgeStatus.className = "badge badge-info";
+    }
+    if (syncSgeBtn) {
+      syncSgeBtn.disabled = true;
+      syncSgeBtn.classList.add("loading");
+      const btnSpan = syncSgeBtn.querySelector("span");
+      if (btnSpan) btnSpan.textContent = "Récupération en cours...";
+    }
+    if (sgeEmptyMessage) sgeEmptyMessage.classList.add("hidden");
+
+    chrome.runtime.sendMessage({
+      type: "FETCH_SGE_DATA",
+      payload: { prm: String(prm), bypassCache: bypassCache }
+    }, (response) => {
+      // Restaurer le bouton
+      if (syncSgeBtn) {
+        syncSgeBtn.disabled = false;
+        syncSgeBtn.classList.remove("loading");
+        const btnSpan = syncSgeBtn.querySelector("span");
+        if (btnSpan) btnSpan.textContent = "⚡ Récupérer les données SGE";
+      }
+
+      if (chrome.runtime.lastError) {
+        if (badgeSgeStatus) {
+          badgeSgeStatus.textContent = "Erreur";
+          badgeSgeStatus.className = "badge badge-danger";
+        }
+        if (sgeEmptyMessage) {
+          sgeEmptyMessage.classList.remove("hidden");
+          const msgSpan = sgeEmptyMessage.querySelector("span");
+          if (msgSpan) msgSpan.textContent = "⚠️ " + chrome.runtime.lastError.message;
+        }
+        return;
+      }
+
+      if (!response || !response.success) {
+        if (badgeSgeStatus) {
+          badgeSgeStatus.textContent = response?.authRequired ? "Session expirée" : "Erreur";
+          badgeSgeStatus.className = "badge badge-danger";
+        }
+        if (sgeEmptyMessage) {
+          sgeEmptyMessage.classList.remove("hidden");
+          const msgSpan = sgeEmptyMessage.querySelector("span");
+          if (msgSpan) msgSpan.textContent = "⚠️ " + (response?.error || "Erreur SGE inconnue");
+        }
+        return;
+      }
+
+      // Succès : afficher les données
+      currentSgeData = response.data;
+      renderSgeDetails(response.data);
+    });
+  }
+
+  /**
+   * Met à jour la section SGE Enedis avec les données récupérées
+   */
+  function renderSgeDetails(sge) {
+    if (!sgeCard) return;
+
+    if (!sge || !sge.hasData) {
+      if (sgeAlimBox) sgeAlimBox.classList.add("hidden");
+      if (sgeComptageBox) sgeComptageBox.classList.add("hidden");
+      if (sgeContractuelBox) sgeContractuelBox.classList.add("hidden");
+      if (sgeEmptyMessage) sgeEmptyMessage.classList.remove("hidden");
+      if (badgeSgeStatus) {
+        badgeSgeStatus.textContent = "Non synchronisé";
+        badgeSgeStatus.className = "badge badge-warning";
+      }
+      if (syncSgeBtn) syncSgeBtn.classList.remove("hidden");
+      return;
+    }
+
+    // Badge de statut global
+    if (badgeSgeStatus) {
+      const isAlim = sge.etatAlimentationCode === "ALIM";
+      badgeSgeStatus.textContent = sge.etatAlimentation || "Synchronisé";
+      badgeSgeStatus.className = isAlim ? "badge badge-success" : "badge badge-warning";
+    }
+
+    // Masquer le message vide et le bouton une fois les données chargées
+    if (sgeEmptyMessage) sgeEmptyMessage.classList.add("hidden");
+    if (syncSgeBtn) {
+      const btnSpan = syncSgeBtn.querySelector("span");
+      if (btnSpan) btnSpan.textContent = "🔄 Actualiser les données SGE";
+    }
+
+    // Encart Alimentation
+    if (sgeAlimBox) {
+      sgeAlimBox.classList.remove("hidden");
+      if (sgeEtatAlim) {
+        sgeEtatAlim.textContent = sge.etatAlimentation || "-";
+        const isAlim = sge.etatAlimentationCode === "ALIM";
+        sgeEtatAlim.className = isAlim ? "badge badge-success" : "badge badge-warning";
+      }
+      if (sgePuissanceRaccordement) sgePuissanceRaccordement.textContent = sge.puissanceRaccordementFormate || "-";
+      if (sgeTensionLivraison) sgeTensionLivraison.textContent = sge.tensionLivraison || "-";
+      if (sgeDomaineTension) sgeDomaineTension.textContent = sge.domaineTension || "-";
+    }
+
+    // Encart Compteur & Disjoncteur
+    if (sgeComptageBox) {
+      sgeComptageBox.classList.remove("hidden");
+
+      // Disjoncteur
+      if (sgeCalibre) sgeCalibre.textContent = sge.calibreDisjoncteur || "-";
+      if (sgeIntensiteReglage) sgeIntensiteReglage.textContent = sge.intensiteReglageFormate || "-";
+      if (sgeDisjAccessible) sgeDisjAccessible.textContent = sge.disjAccessible === true ? "Oui" : sge.disjAccessible === false ? "Non" : "-";
+
+      // Compteur
+      if (sgeTypeCompteur) sgeTypeCompteur.textContent = sge.typeCompteur || "-";
+      if (sgeTeleoperable) sgeTeleoperable.textContent = sge.teleoperable === true ? "✅ Oui" : sge.teleoperable === false ? "❌ Non" : "-";
+      if (sgeNumeroSerie) sgeNumeroSerie.textContent = sge.numeroSerie || "-";
+      if (sgeNbFils) sgeNbFils.textContent = sge.nbFilsLabel || "-";
+      if (sgeTensionCompteur) sgeTensionCompteur.textContent = sge.tensionCompteur || "-";
+      if (sgeIntensiteNominale) sgeIntensiteNominale.textContent = sge.intensiteNominale || "-";
+
+      // Relevé & HC
+      if (sgePeriodicite) sgePeriodicite.textContent = sge.periodiciteReleve || "-";
+      if (sgeHcRow && sgePlagesHc) {
+        if (sge.plagesHcFormatees) {
+          sgeHcRow.classList.remove("hidden");
+          sgePlagesHc.textContent = sge.plagesHcFormatees;
+        } else {
+          sgeHcRow.classList.add("hidden");
+        }
+      }
+    }
+
+    // Encart Situation Contractuelle
+    if (sgeContractuelBox) {
+      const hasContractuel = sge.puissanceSouscriteFormate || sge.puissanceCoupureFormate || sge.calendrierFournisseur || sge.formuleTarifaire;
+      if (hasContractuel) {
+        sgeContractuelBox.classList.remove("hidden");
+        if (sgePuissanceSouscrite) sgePuissanceSouscrite.textContent = sge.puissanceSouscriteFormate || "-";
+        if (sgePuissanceCoupure) sgePuissanceCoupure.textContent = sge.puissanceCoupureFormate || "-";
+        if (sgeCalendrier) sgeCalendrier.textContent = sge.calendrierFournisseur || "-";
+        if (sgeFormuleTarifaire) {
+          sgeFormuleTarifaire.textContent = sge.formuleTarifaire || "-";
+          if (sge.formuleTarifaireCode) {
+            sgeFormuleTarifaire.title = `Code : ${sge.formuleTarifaireCode}`;
+          }
+        }
+      } else {
+        sgeContractuelBox.classList.add("hidden");
+      }
+    }
+  }
+
   // Copie du diagnostic en cliquant sur le tiret du prix du kWh s'il est indisponible
   prixKwh.addEventListener("click", () => {
     if (currentContract?.prixKwhTTC === "-" && currentContract.debugInfo) {
@@ -504,6 +713,31 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
+    // Données SGE Enedis
+    const sgeLines = [];
+    if (currentSgeData && currentSgeData.hasData) {
+      const sge = currentSgeData;
+      sgeLines.push(`\n⚡ DONNÉES SGE ENEDIS`);
+      if (sge.etatAlimentation) sgeLines.push(`• État alimentation : ${sge.etatAlimentation}`);
+      if (sge.puissanceRaccordementFormate) sgeLines.push(`• Puissance de raccordement : ${sge.puissanceRaccordementFormate}`);
+      if (sge.tensionLivraison && sge.tensionLivraison !== "-") sgeLines.push(`• Tension de livraison : ${sge.tensionLivraison}`);
+      if (sge.domaineTension) sgeLines.push(`• Domaine de tension : ${sge.domaineTension}`);
+      if (sge.calibreDisjoncteur) sgeLines.push(`• Disjoncteur calibre : ${sge.calibreDisjoncteur}`);
+      if (sge.intensiteReglageFormate) sgeLines.push(`• Intensité de réglage : ${sge.intensiteReglageFormate}`);
+      if (sge.disjAccessible !== null) sgeLines.push(`• Disjoncteur accessible : ${sge.disjAccessible ? "Oui" : "Non"}`);
+      if (sge.typeCompteur) sgeLines.push(`• Type compteur : ${sge.typeCompteur}`);
+      if (sge.teleoperable !== null) sgeLines.push(`• Téléopérable : ${sge.teleoperable ? "Oui" : "Non"}`);
+      if (sge.nbFilsLabel && sge.nbFilsLabel !== "-") sgeLines.push(`• Installation : ${sge.nbFilsLabel}`);
+      if (sge.numeroSerie && sge.numeroSerie !== "-") sgeLines.push(`• N° série compteur : ${sge.numeroSerie}`);
+      if (sge.intensiteNominale && sge.intensiteNominale !== "-") sgeLines.push(`• Intensité nominale : ${sge.intensiteNominale}`);
+      if (sge.periodiciteReleve) sgeLines.push(`• Périodicité relevé : ${sge.periodiciteReleve}`);
+      if (sge.plagesHcFormatees) sgeLines.push(`• Plages HC (Enedis) : ${sge.plagesHcFormatees}`);
+      if (sge.puissanceSouscriteFormate) sgeLines.push(`• Puissance souscrite (SGE) : ${sge.puissanceSouscriteFormate}`);
+      if (sge.puissanceCoupureFormate) sgeLines.push(`• Puissance de coupure : ${sge.puissanceCoupureFormate}`);
+      if (sge.calendrierFournisseur) sgeLines.push(`• Calendrier fournisseur : ${sge.calendrierFournisseur}`);
+      if (sge.formuleTarifaire) sgeLines.push(`• Formule tarifaire : ${sge.formuleTarifaire}${sge.formuleTarifaireCode ? ` (${sge.formuleTarifaireCode})` : ""}`);
+    }
+
     const summaryText = [
       `📄 RÉCAPITULATIF CONTRAT CLIENT`,
       `• Compte : ${currentAccountNumber || "-"}`,
@@ -521,7 +755,8 @@ document.addEventListener("DOMContentLoaded", () => {
       ...(currentContract.dateFin ? [`• Date de résiliation : ${currentContract.dateFin}`] : []),
       `• Compteur Linky : ${currentContract.linky}`,
       `• Adresse : ${currentContract.adresse}`,
-      ...consoLines
+      ...consoLines,
+      ...sgeLines
     ].join("\n");
 
     navigator.clipboard.writeText(summaryText).then(() => {
@@ -1423,6 +1658,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Rendu du Suivi Conso Mensuel
     renderConsoDetails(c.consoMensuelle);
+
+    // Chargement automatique des données SGE pour ce PRM (si disponibles en cache)
+    if (c.prm && c.prm !== "-") {
+      // Réinitialiser l'état SGE pour le nouveau contrat
+      currentSgeData = null;
+      renderSgeDetails(null);
+      // Tenter le chargement (le cache SGE sera vérifié en premier dans le background)
+      fetchSgeForCurrentContract(c.prm, false);
+    } else {
+      currentSgeData = null;
+      renderSgeDetails(null);
+    }
   }
 
   /**
