@@ -107,6 +107,34 @@ document.addEventListener("DOMContentLoaded", () => {
   const consoEmptyMessage = document.getElementById("consoEmptyMessage");
   const badgeConsoStatus = document.getElementById("badgeConsoStatus");
 
+  // Éléments du bloc Échéancier de paiement
+  const echeancierCard = document.getElementById("echeancierCard");
+  const badgeEcheancierStatus = document.getElementById("badgeEcheancierStatus");
+  const echeancierMontant = document.getElementById("echeancierMontant");
+  const echeancierQuand = document.getElementById("echeancierQuand");
+  const echeancierDepuis = document.getElementById("echeancierDepuis");
+  const echeancierHistoriqueBox = document.getElementById("echeancierHistoriqueBox");
+  const echeancierHistoriqueToggle = document.getElementById("echeancierHistoriqueToggle");
+  const echeancierHistoriqueContent = document.getElementById("echeancierHistoriqueContent");
+  const echeancierHistoriqueBody = document.getElementById("echeancierHistoriqueBody");
+
+  // Éléments du calculateur de mensualités
+  const echeancierCalcBox = document.getElementById("echeancierCalcBox");
+  const echeancierCalcToggle = document.getElementById("echeancierCalcToggle");
+  const echeancierCalcContent = document.getElementById("echeancierCalcContent");
+  const calcDateDebut = document.getElementById("calcDateDebut");
+  const calcDateFin = document.getElementById("calcDateFin");
+  const calcPresetAll = document.getElementById("calcPresetAll");
+  const calcPreset1Year = document.getElementById("calcPreset1Year");
+  const calcPresetYtd = document.getElementById("calcPresetYtd");
+  const calcTotalAmount = document.getElementById("calcTotalAmount");
+  const calcTotalCount = document.getElementById("calcTotalCount");
+  const calcBreakdownList = document.getElementById("calcBreakdownList");
+  const copyCalcResultBtn = document.getElementById("copyCalcResultBtn");
+
+  let currentActiveSchedules = [];
+  let lastCalcResult = null;
+
   // Éléments du bloc SGE Enedis
   const sgeCard = document.getElementById("sgeCard");
   const badgeSgeStatus = document.getElementById("badgeSgeStatus");
@@ -240,6 +268,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let contractsList = [];
   let currentContract = null;
   let activeTabContext = { agreementIds: [], agreementId: null };
+  let cachedPaymentData = null;
 
   // Initialisation au chargement du popup (restitution instantanée depuis le cache si disponible)
   loadData(false);
@@ -493,6 +522,629 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       fetchSgeForCurrentContract(currentContract.prm, true);
     });
+  }
+
+  /**
+   * Toggle de l'historique des échéanciers
+   */
+  if (echeancierHistoriqueToggle) {
+    echeancierHistoriqueToggle.addEventListener("click", () => {
+      const content = echeancierHistoriqueContent;
+      const chevron = echeancierHistoriqueToggle.querySelector(".echeancier-historique-chevron");
+      if (content.style.display === "none") {
+        content.style.display = "";
+        if (chevron) chevron.classList.add("open");
+      } else {
+        content.style.display = "none";
+        if (chevron) chevron.classList.remove("open");
+      }
+    });
+  }
+
+  /**
+   * Toggle du calculateur d'échéances
+   */
+  if (echeancierCalcToggle) {
+    echeancierCalcToggle.addEventListener("click", () => {
+      const content = echeancierCalcContent;
+      const chevron = echeancierCalcToggle.querySelector(".echeancier-calc-chevron");
+      if (content.style.display === "none") {
+        content.style.display = "";
+        if (chevron) chevron.classList.remove("closed");
+      } else {
+        content.style.display = "none";
+        if (chevron) chevron.classList.add("closed");
+      }
+    });
+  }
+
+  // Écouteurs de changement de dates pour le calculateur
+  function onCalcDateInput() {
+    clearActivePreset();
+    updateEcheancierCalculation();
+  }
+
+  if (calcDateDebut) {
+    calcDateDebut.addEventListener("change", onCalcDateInput);
+    calcDateDebut.addEventListener("input", onCalcDateInput);
+  }
+  if (calcDateFin) {
+    calcDateFin.addEventListener("change", onCalcDateInput);
+    calcDateFin.addEventListener("input", onCalcDateInput);
+  }
+
+  function clearActivePreset() {
+    [calcPresetAll, calcPreset1Year, calcPresetYtd].forEach(btn => {
+      if (btn) btn.classList.remove("active");
+    });
+  }
+
+  function setActivePreset(activeBtn) {
+    clearActivePreset();
+    if (activeBtn) activeBtn.classList.add("active");
+  }
+
+  if (calcPresetAll) {
+    calcPresetAll.addEventListener("click", () => {
+      setActivePreset(calcPresetAll);
+      if (!currentActiveSchedules || currentActiveSchedules.length === 0) return;
+      const validDates = currentActiveSchedules
+        .map(s => parseKrakenDate(s.du))
+        .filter(Boolean)
+        .sort((a, b) => a.getTime() - b.getTime());
+      const earliestDate = validDates[0] || (currentContract?.rawValidFrom ? new Date(currentContract.rawValidFrom) : new Date());
+      if (calcDateDebut) calcDateDebut.value = formatDateToISO(earliestDate);
+      if (calcDateFin) calcDateFin.value = formatDateToISO(new Date());
+      updateEcheancierCalculation();
+    });
+  }
+
+  if (calcPreset1Year) {
+    calcPreset1Year.addEventListener("click", () => {
+      setActivePreset(calcPreset1Year);
+      const d = new Date();
+      d.setFullYear(d.getFullYear() - 1);
+      if (calcDateDebut) calcDateDebut.value = formatDateToISO(d);
+      if (calcDateFin) calcDateFin.value = formatDateToISO(new Date());
+      updateEcheancierCalculation();
+    });
+  }
+
+  if (calcPresetYtd) {
+    calcPresetYtd.addEventListener("click", () => {
+      setActivePreset(calcPresetYtd);
+      const d = new Date(new Date().getFullYear(), 0, 1);
+      if (calcDateDebut) calcDateDebut.value = formatDateToISO(d);
+      if (calcDateFin) calcDateFin.value = formatDateToISO(new Date());
+      updateEcheancierCalculation();
+    });
+  }
+
+  if (copyCalcResultBtn) {
+    copyCalcResultBtn.addEventListener("click", () => {
+      if (!lastCalcResult || !lastCalcResult.res) return;
+      const { res, fromDate, toDate } = lastCalcResult;
+      const lines = [
+        `Simulation mensualités du ${formatDateFR(fromDate)} au ${formatDateFR(toDate)} (${res.count} mensualité${res.count > 1 ? "s" : ""}) :`
+      ];
+      for (const p of res.periodsBreakdown) {
+        lines.push(`• Du ${p.du} au ${p.au} : ${p.count} × ${p.montantUnit} = ${p.subtotal.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`);
+      }
+      lines.push(`👉 TOTAL THÉORIQUE DÛ : ${res.totalDue.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`);
+
+      navigator.clipboard.writeText(lines.join("\n")).then(() => {
+        const prevText = copyCalcResultBtn.textContent;
+        copyCalcResultBtn.textContent = "✓ Copié !";
+        setTimeout(() => {
+          copyCalcResultBtn.textContent = prevText;
+        }, 1500);
+      });
+    });
+  }
+
+  /**
+   * Récupère l'échéancier de paiement depuis Kraken via le partial endpoint
+   * @param {string} account - Le numéro de compte (ex: A-C887F289)
+   * @param {number} tabId - L'ID de l'onglet Kraken
+   */
+  async function fetchPaymentSchedule(account, tabId) {
+    if (!account || !tabId) return;
+    try {
+      if (badgeEcheancierStatus) {
+        badgeEcheancierStatus.textContent = "Chargement...";
+        badgeEcheancierStatus.className = "badge badge-info";
+      }
+
+      const [result] = await chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        func: async (acct) => {
+          try {
+            // 1. Récupérer les échéanciers groupés par ledger
+            const res = await fetch("/accounts/" + acct + "/partial/payment-details/");
+            if (!res.ok) return null;
+            const html = await res.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, "text/html");
+
+            const allSections = doc.querySelectorAll('div[id^="schedules-L-"]');
+            if (allSections.length === 0) return null;
+
+            const ledgersData = [];
+            for (const section of allSections) {
+              const ledId = section.id.replace("schedules-", "");
+              // Extraire l'agreementId s'il figure dans les boutons d'action (ex: /payments/A-XXXX/161916/...)
+              const agMatch = section.innerHTML.match(/\/payments\/(?:scheduling\/)?[A-Z0-9-]+\/(\d+)\//);
+              const agreementId = agMatch ? agMatch[1] : null;
+
+              const rows = section.querySelectorAll("table tbody tr");
+              const schedules = [];
+              for (const row of rows) {
+                const cells = row.querySelectorAll("td");
+                if (cells.length < 4) continue;
+                const du = cells[0].textContent.trim();
+                const au = cells[1].textContent.trim();
+                const quand = cells[2].textContent.trim();
+                const montantText = cells[3].textContent.trim();
+                const isActive = row.classList.contains("tako-table--success");
+                schedules.push({ du: du, au: au, quand: quand, montant: montantText, isActive: isActive });
+              }
+              ledgersData.push({ ledgerId: ledId, agreementId: agreementId, schedules: schedules });
+            }
+
+            return { ledgersData: ledgersData };
+          } catch (e) {
+            return null;
+          }
+        },
+        args: [account]
+      });
+
+      const payload = result?.result;
+      if (!payload || !payload.ledgersData || payload.ledgersData.length === 0) {
+        if (badgeEcheancierStatus) {
+          badgeEcheancierStatus.textContent = "Non disponible";
+          badgeEcheancierStatus.className = "badge badge-warning";
+        }
+        return;
+      }
+
+      // 2e injection : lire le DOM actuel pour trouver le mapping ledger → PRM
+      // On passe les PRMs connus pour ne chercher que ceux-là (pas d'IDs parasites)
+      let ledgerPrmMap = {};
+      const knownPrms = (contractsList || [])
+        .map(c => c.prm)
+        .filter(p => p && p !== "-" && /^\d{14}$/.test(p));
+
+      if (knownPrms.length > 0) {
+        try {
+          const mappingResults = await chrome.scripting.executeScript({
+            target: { tabId: tabId, allFrames: true },
+            func: (targetPrms) => {
+              var rawText = (document.body && document.body.textContent) ? document.body.textContent : "";
+              if (rawText.length < 20) return null;
+              // Nettoyage des isolats Unicode directionnels Kraken autour des nombres
+              var bodyText = rawText.replace(/[\u2068\u2069\u200E\u200F\u202A-\u202E]/g, "");
+
+              // Trouver les positions de tous les ledger IDs
+              var ledgerRe = /L-[A-Z0-9]{8,}/g;
+              var foundLedgers = [];
+              var m;
+              while ((m = ledgerRe.exec(bodyText)) !== null) {
+                foundLedgers.push({ id: m[0], pos: m.index });
+              }
+              if (foundLedgers.length === 0) return null;
+
+              // Trouver toutes les positions des PRMs connus dans le texte
+              var map = {};
+              for (var pi = 0; pi < targetPrms.length; pi++) {
+                var prm = targetPrms[pi];
+                var prmIdx = -1;
+                while ((prmIdx = bodyText.indexOf(prm, prmIdx + 1)) !== -1) {
+                  // Trouver le ledger le plus proche de cette occurrence du PRM
+                  var nearest = null;
+                  var minD = 2000;
+                  for (var li = 0; li < foundLedgers.length; li++) {
+                    var d = Math.abs(prmIdx - foundLedgers[li].pos);
+                    if (d < minD) {
+                      minD = d;
+                      nearest = foundLedgers[li].id;
+                    }
+                  }
+                  if (nearest) {
+                    map[nearest] = prm;
+                  }
+                }
+              }
+              return map;
+            },
+            args: [knownPrms]
+          });
+          // Fusionner les résultats de tous les frames
+          if (mappingResults) {
+            for (const r of mappingResults) {
+              if (r.result) {
+                for (const key of Object.keys(r.result)) {
+                  ledgerPrmMap[key] = r.result[key];
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      // Stocker les données brutes pour le switch de contrat
+      cachedPaymentData = { ledgersData: payload.ledgersData, ledgerPrmMap: ledgerPrmMap };
+      console.log("[Popup] === PAIEMENTS DÉTECTÉS ===");
+      console.log("[Popup] Mapping ledger->PRM :", JSON.stringify(ledgerPrmMap));
+      for (const l of payload.ledgersData) {
+        console.log(`[Popup] Ledger ${l.ledgerId} (${l.schedules.length} échéances) : active=${l.schedules.find(s => s.isActive)?.montant || "aucune"} | 1ère=${l.schedules[0]?.montant || "vide"}`);
+      }
+
+      // Trouver la bonne section pour le contrat courant
+      renderEcheancierForContract(currentContract?.prm);
+
+    } catch (err) {
+      console.warn("[Popup] Erreur récupération échéancier :", err.message);
+      if (badgeEcheancierStatus) {
+        badgeEcheancierStatus.textContent = "Erreur";
+        badgeEcheancierStatus.className = "badge badge-danger";
+      }
+    }
+  }
+
+  /**
+   * Parse un montant d'échéance (ex: '65,47 €' -> 65.47)
+   */
+  function parseScheduleMontant(str) {
+    if (!str) return 0;
+    const cleaned = String(str).replace(/[^\d,.-]/g, "").replace(",", ".");
+    const val = parseFloat(cleaned);
+    return isNaN(val) ? 0 : val;
+  }
+
+  /**
+   * Parse une date Kraken (ex: '6th Feb 2026', '24th Oct 2023', '24/10/2023', '2023-10-24')
+   */
+  function parseKrakenDate(dateStr) {
+    if (!dateStr || dateStr === "---" || dateStr === "-") return null;
+    const str = String(dateStr).trim();
+
+    // Format ISO YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+      const parts = str.split("-").map(Number);
+      return new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0);
+    }
+
+    // Format DD/MM/YYYY
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(str)) {
+      const parts = str.split("/").map(Number);
+      return new Date(parts[2], parts[1] - 1, parts[0], 12, 0, 0);
+    }
+
+    // Format ordinal anglais (6th, 1st, 2nd, 3rd) ou français
+    const cleanStr = str.replace(/(\d+)(?:st|nd|rd|th|er|e)\b/i, "$1");
+    const monthMap = {
+      jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+      janv: 0, févr: 1, fevr: 1, mars: 2, avr: 3, mai: 4, juin: 5, juil: 6, août: 7, aout: 7, sept: 8, octo: 9, nov: 10, déc: 11,
+      january: 0, february: 1, march: 2, april: 3, june: 5, july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
+      janvier: 0, février: 1, fevrier: 1, avril: 3, juillet: 6, septembre: 8, octobre: 9, novembre: 10, décembre: 11
+    };
+
+    const match = cleanStr.match(/(\d{1,2})\s+([a-zA-Zàéûôöïîç]+)\.?\s+(\d{4})/i);
+    if (match) {
+      const day = parseInt(match[1], 10);
+      const mStr = match[2].toLowerCase();
+      const year = parseInt(match[3], 10);
+      let month = null;
+      for (const k of Object.keys(monthMap)) {
+        if (mStr.startsWith(k) || k.startsWith(mStr)) {
+          month = monthMap[k];
+          break;
+        }
+      }
+      if (month !== null && !isNaN(day) && !isNaN(year)) {
+        return new Date(year, month, day, 12, 0, 0);
+      }
+    }
+
+    const d = new Date(str);
+    return isNaN(d.getTime()) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0);
+  }
+
+  function formatDateToISO(d) {
+    if (!d || isNaN(d.getTime())) return "";
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function formatDateFR(d) {
+    if (!d || isNaN(d.getTime())) return "-";
+    return d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
+  }
+
+  /**
+   * Calcule le total théorique des mensualités dues entre deux dates
+   */
+  function calculateDuePayments(schedulesList, fromDate, toDate) {
+    let totalDue = 0;
+    const installments = [];
+    const periodsBreakdown = [];
+
+    if (!Array.isArray(schedulesList) || schedulesList.length === 0 || !fromDate || !toDate || fromDate > toDate) {
+      return { totalDue: 0, count: 0, installments: [], periodsBreakdown: [] };
+    }
+
+    const fDate = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate(), 0, 0, 0);
+    const tDate = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate(), 23, 59, 59);
+
+    for (const s of schedulesList) {
+      const montant = parseScheduleMontant(s.montant);
+      if (montant <= 0) continue;
+      const dStart = parseKrakenDate(s.du);
+      const dEnd = parseKrakenDate(s.au); // null si en cours
+      if (!dStart) continue;
+
+      const dayMatch = (s.quand || "").match(/(\d{1,2})/);
+      const debitDay = dayMatch ? parseInt(dayMatch[1], 10) : dStart.getDate();
+
+      let cursorYear = dStart.getFullYear();
+      let cursorMonth = dStart.getMonth();
+      const maxDate = dEnd || tDate;
+
+      let periodCount = 0;
+
+      while (true) {
+        const daysInMonth = new Date(cursorYear, cursorMonth + 1, 0).getDate();
+        const actualDay = Math.min(debitDay, daysInMonth);
+        const installmentDate = new Date(cursorYear, cursorMonth, actualDay, 12, 0, 0);
+
+        if (installmentDate >= dStart && (!dEnd || installmentDate <= dEnd)) {
+          if (installmentDate >= fDate && installmentDate <= tDate) {
+            totalDue += montant;
+            periodCount++;
+            installments.push({
+              date: installmentDate,
+              montant: montant,
+              label: s.montant,
+              du: s.du,
+              au: s.au || "en cours"
+            });
+          }
+        }
+
+        if (installmentDate > maxDate) break;
+
+        cursorMonth++;
+        if (cursorMonth > 11) {
+          cursorMonth = 0;
+          cursorYear++;
+        }
+        if (cursorYear > maxDate.getFullYear() + 1) break;
+      }
+
+      if (periodCount > 0) {
+        periodsBreakdown.push({
+          du: s.du,
+          au: s.au && s.au !== "---" ? s.au : "En cours",
+          montantUnit: s.montant,
+          montantNum: montant,
+          count: periodCount,
+          subtotal: periodCount * montant
+        });
+      }
+    }
+
+    return { totalDue, count: installments.length, installments, periodsBreakdown };
+  }
+
+  /**
+   * Met à jour l'affichage du calculateur de mensualités
+   */
+  function updateEcheancierCalculation() {
+    if (!calcDateDebut || !calcDateFin) return;
+
+    const fromDate = calcDateDebut.value ? new Date(calcDateDebut.value + "T12:00:00") : null;
+    const toDate = calcDateFin.value ? new Date(calcDateFin.value + "T12:00:00") : null;
+
+    if (!fromDate || !toDate) {
+      if (calcTotalAmount) calcTotalAmount.textContent = "0,00 €";
+      if (calcTotalCount) calcTotalCount.textContent = "0 mensualité";
+      if (calcBreakdownList) calcBreakdownList.textContent = "";
+      lastCalcResult = null;
+      return;
+    }
+
+    const res = calculateDuePayments(currentActiveSchedules, fromDate, toDate);
+    lastCalcResult = { res, fromDate, toDate };
+
+    if (calcTotalAmount) {
+      calcTotalAmount.textContent = res.totalDue.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+    }
+    if (calcTotalCount) {
+      calcTotalCount.textContent = `${res.count} mensualité${res.count > 1 ? "s" : ""}`;
+    }
+
+    if (calcBreakdownList) {
+      calcBreakdownList.textContent = "";
+      if (res.periodsBreakdown.length === 0) {
+        const emptyDiv = document.createElement("div");
+        emptyDiv.className = "calc-breakdown-row";
+        emptyDiv.style.fontStyle = "italic";
+        emptyDiv.style.color = "var(--text-muted)";
+        emptyDiv.textContent = "Aucune mensualité tombant sur cette période.";
+        calcBreakdownList.appendChild(emptyDiv);
+      } else {
+        for (const p of res.periodsBreakdown) {
+          const row = document.createElement("div");
+          row.className = "calc-breakdown-row";
+
+          const periodCol = document.createElement("div");
+          periodCol.className = "calc-breakdown-period";
+
+          const formulaSpan = document.createElement("span");
+          formulaSpan.className = "calc-breakdown-formula";
+          formulaSpan.textContent = `${p.count} × ${p.montantUnit}`;
+
+          const datesSpan = document.createElement("span");
+          datesSpan.className = "calc-breakdown-dates";
+          datesSpan.textContent = `Période : ${p.du} ➔ ${p.au}`;
+
+          periodCol.appendChild(formulaSpan);
+          periodCol.appendChild(datesSpan);
+
+          const subtotalSpan = document.createElement("span");
+          subtotalSpan.className = "calc-breakdown-subtotal";
+          subtotalSpan.textContent = p.subtotal.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+
+          row.appendChild(periodCol);
+          row.appendChild(subtotalSpan);
+          calcBreakdownList.appendChild(row);
+        }
+      }
+    }
+  }
+
+  /**
+   * Initialise et calcule automatiquement pour un jeu d'échéances donné
+   */
+  function initAndRunCalculator(schedules) {
+    if (!calcDateDebut || !calcDateFin) return;
+
+    currentActiveSchedules = schedules || [];
+
+    const validDates = currentActiveSchedules
+      .map(s => parseKrakenDate(s.du))
+      .filter(Boolean)
+      .sort((a, b) => a.getTime() - b.getTime());
+
+    const earliestDate = validDates[0] || (currentContract?.rawValidFrom ? new Date(currentContract.rawValidFrom) : new Date());
+    const today = new Date();
+
+    calcDateDebut.value = formatDateToISO(earliestDate);
+    calcDateFin.value = formatDateToISO(today);
+
+    setActivePreset(calcPresetAll);
+    updateEcheancierCalculation();
+  }
+
+  /**
+   * Affiche l'échéancier correspondant au PRM donné
+   */
+  function renderEcheancierForContract(prm) {
+    if (!cachedPaymentData || !cachedPaymentData.ledgersData) return;
+
+    const { ledgersData, ledgerPrmMap } = cachedPaymentData;
+    let targetSection = null;
+
+    // Stratégie 1 : matcher par PRM via le mapping ledger→PRM
+    if (prm && ledgerPrmMap) {
+      const matchingSections = ledgersData.filter(s => ledgerPrmMap[s.ledgerId] === prm);
+      if (matchingSections.length === 1) {
+        targetSection = matchingSections[0];
+      } else if (matchingSections.length > 1) {
+        // En cas de plusieurs ledgers pour un même logement (ex: ancien ledger à 0,00 € et nouveau ledger actif) :
+        // 1. Privilégier un ledger ayant une mensualité active strictement supérieure à 0 €
+        // 2. Sinon privilégier un ledger ayant n'importe quelle échéance > 0 €
+        // 3. Sinon le plus grand nombre d'échéances
+        targetSection = matchingSections.find(s => s.schedules && s.schedules.some(r => r.isActive && parseScheduleMontant(r.montant) > 0))
+                     || matchingSections.find(s => s.schedules && s.schedules.some(r => parseScheduleMontant(r.montant) > 0))
+                     || matchingSections.find(s => s.schedules && s.schedules.some(r => r.isActive))
+                     || matchingSections.slice().sort((a, b) => (b.schedules?.length || 0) - (a.schedules?.length || 0))[0];
+      }
+    }
+
+    // Stratégie 2 : matcher par ledgerId du propertyMapping
+    if (!targetSection && currentContract && activeTabContext?.propertyMapping) {
+      const mapping = activeTabContext.propertyMapping.find(m =>
+        (m.agreementId && String(m.agreementId) === String(currentContract.agreementId || currentContract.id)) ||
+        (m.prm && m.prm === prm)
+      );
+      if (mapping?.ledgerId) {
+        targetSection = ledgersData.find(s => s.ledgerId === mapping.ledgerId);
+      }
+    }
+
+    // Stratégie 3 : si un seul ledger, prendre celui-là
+    if (!targetSection && ledgersData.length === 1) {
+      targetSection = ledgersData[0];
+    }
+
+    // Stratégie 4 : matcher par index avec les contrats
+    if (!targetSection && contractsList && contractsList.length > 0 && currentContract) {
+      const idx = contractsList.indexOf(currentContract);
+      if (idx >= 0 && idx < ledgersData.length) {
+        targetSection = ledgersData[idx];
+      }
+    }
+
+    // Fallback : premier ledger ayant un échéancier actif > 0 € ou premier ledger
+    if (!targetSection) {
+      targetSection = ledgersData.find(s => s.schedules && s.schedules.some(r => r.isActive && parseScheduleMontant(r.montant) > 0))
+                   || ledgersData.find(s => s.schedules && s.schedules.some(r => r.isActive))
+                   || ledgersData[0];
+    }
+
+    console.log(`[Popup] Affichage contrat PRM ${prm} -> Ledger retenu: ${targetSection?.ledgerId} (${targetSection?.schedules?.length || 0} lignes)`);
+
+    const schedules = targetSection?.schedules;
+    if (!schedules || schedules.length === 0) {
+      if (badgeEcheancierStatus) {
+        badgeEcheancierStatus.textContent = "Aucun";
+        badgeEcheancierStatus.className = "badge badge-warning";
+      }
+      if (echeancierCard) echeancierCard.style.display = "none";
+      return;
+    }
+
+    // Afficher la carte
+    if (echeancierCard) echeancierCard.style.display = "";
+
+    // Mensualité actuelle : privilégier la ligne active > 0 €, sinon la première ligne > 0 €
+    const current = schedules.find(s => s.isActive && parseScheduleMontant(s.montant) > 0)
+                 || schedules.find(s => parseScheduleMontant(s.montant) > 0)
+                 || schedules.find(s => s.isActive)
+                 || schedules[0];
+    if (echeancierMontant) echeancierMontant.textContent = current.montant;
+    if (echeancierQuand) echeancierQuand.textContent = current.quand;
+    if (echeancierDepuis) echeancierDepuis.textContent = "depuis le " + current.du;
+    if (badgeEcheancierStatus) {
+      badgeEcheancierStatus.textContent = current.montant;
+      badgeEcheancierStatus.className = "badge badge-success";
+    }
+
+    // Historique
+    const historique = schedules.filter(s => s !== current);
+    if (echeancierHistoriqueBox) {
+      if (historique.length > 0) {
+        echeancierHistoriqueBox.style.display = "";
+        if (echeancierHistoriqueBody) {
+          echeancierHistoriqueBody.textContent = "";
+          for (const h of historique) {
+            const tr = document.createElement("tr");
+            const tdDu = document.createElement("td");
+            tdDu.textContent = h.du;
+            const tdAu = document.createElement("td");
+            tdAu.textContent = h.au;
+            const tdMontant = document.createElement("td");
+            tdMontant.textContent = h.montant;
+            const tdQuand = document.createElement("td");
+            tdQuand.textContent = h.quand;
+            tr.appendChild(tdDu);
+            tr.appendChild(tdAu);
+            tr.appendChild(tdMontant);
+            tr.appendChild(tdQuand);
+            echeancierHistoriqueBody.appendChild(tr);
+          }
+        }
+      } else {
+        echeancierHistoriqueBox.style.display = "none";
+      }
+    }
+
+    // Initialiser et exécuter le calculateur de mensualités théoriques
+    initAndRunCalculator(schedules);
   }
 
   /**
@@ -876,6 +1528,11 @@ document.addEventListener("DOMContentLoaded", () => {
               handleContractsResult(cached.contracts);
               showContent();
 
+              // Récupérer l'échéancier de paiement en parallèle
+              if (tab?.id && account) {
+                fetchPaymentSchedule(account, tab.id);
+              }
+
               // Lancement discret d'une revalidation en tâche de fond sans bloquer l'UI
               triggerSilentBackgroundRevalidation(tab, account);
               return;
@@ -925,11 +1582,13 @@ document.addEventListener("DOMContentLoaded", () => {
                   const agLink = parent.querySelector('a[href*="agreements/"]');
                   const agId = agLink?.getAttribute("href")?.match(/agreements\/(\d+)/)?.[1];
                   const prmMatch = parent.innerText.match(/\b\d{14}\b/);
+                  const ledgerMatch = parent.innerText.match(/\b(L-[A-Z0-9]{8,})\b/);
                   if (agId || prmMatch) {
                     propertyMapping.push({
                       propertyId: pId,
                       agreementId: agId || null,
-                      prm: prmMatch ? prmMatch[0].replace(/[\u2068\u2069\u200E\u200F\u202A-\u202E]/g, "") : null
+                      prm: prmMatch ? prmMatch[0].replace(/[\u2068\u2069\u200E\u200F\u202A-\u202E]/g, "") : null,
+                      ledgerId: ledgerMatch ? ledgerMatch[1] : null
                     });
                     break;
                   }
@@ -973,6 +1632,7 @@ document.addEventListener("DOMContentLoaded", () => {
           if (injectionResult?.result) {
             tabContext = injectionResult.result;
             activeTabContext = injectionResult.result;
+            activeTabContext.tabId = tab.id;
           }
         } catch (scriptErr) {
           // Poursuite avec tabContext par défaut si l'injection échoue
@@ -1034,6 +1694,7 @@ document.addEventListener("DOMContentLoaded", () => {
           if (injectionResult?.result) {
             tabContext = injectionResult.result;
             activeTabContext = injectionResult.result;
+            activeTabContext.tabId = tab.id;
           }
         } catch (_) {}
       }
@@ -1126,6 +1787,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
             handleContractsResult(response.data);
             showContent();
+
+            // Récupérer l'échéancier de paiement en parallèle
+            if (tab?.id && currentAccountNumber) {
+              fetchPaymentSchedule(currentAccountNumber, tab.id);
+            }
           }
         );
       };
@@ -1786,6 +2452,11 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       currentSgeData = null;
       renderSgeDetails(null);
+    }
+
+    // Rafraîchir l'échéancier pour le nouveau contrat (sans re-fetch, juste re-render)
+    if (cachedPaymentData) {
+      renderEcheancierForContract(c.prm);
     }
   }
 

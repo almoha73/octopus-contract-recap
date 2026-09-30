@@ -202,6 +202,91 @@
           <span id="valeurAdresse" class="detail-value address-value">-</span>
         </div>
       </div>
+      <!-- Section Échéancier de Paiement -->
+      <div id="echeancierCard" class="echeancier-card" style="display: none;">
+        <div class="echeancier-card-header" id="echeancierToggleHeader">
+          <div class="echeancier-title-group">
+            <span class="echeancier-icon">💳</span>
+            <h3 class="echeancier-title">Échéancier de paiement</h3>
+          </div>
+          <span id="badgeEcheancierStatus" class="badge badge-info">-</span>
+        </div>
+
+        <div id="echeancierContentBody" class="echeancier-content-body">
+          <!-- Mensualité actuelle (hero) -->
+          <div id="echeancierCurrentBox" class="echeancier-current-box">
+            <div class="echeancier-current-top">
+              <span class="echeancier-tag">Mensualité actuelle</span>
+              <span id="echeancierDepuis" class="echeancier-depuis">-</span>
+            </div>
+            <div class="echeancier-current-values">
+              <span id="echeancierMontant" class="echeancier-main-montant highlight-cyan">- €</span>
+              <span id="echeancierQuand" class="echeancier-main-quand highlight-pink">-</span>
+            </div>
+          </div>
+
+          <!-- Historique des échéanciers -->
+          <div id="echeancierHistoriqueBox" class="echeancier-historique-box" style="display: none;">
+            <div class="echeancier-historique-header" id="echeancierHistoriqueToggle">
+              <span class="echeancier-historique-label">📜 Historique des mensualités</span>
+              <span class="echeancier-historique-chevron">▸</span>
+            </div>
+            <div id="echeancierHistoriqueContent" class="echeancier-historique-content" style="display: none;">
+              <table class="echeancier-table">
+                <thead>
+                  <tr>
+                    <th>Du</th>
+                    <th>Au</th>
+                    <th>Montant</th>
+                    <th>Fréquence</th>
+                  </tr>
+                </thead>
+                <tbody id="echeancierHistoriqueBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Simulateur / Calculateur de mensualités théoriques dues -->
+          <div id="echeancierCalcBox" class="echeancier-calc-box">
+            <div class="echeancier-calc-header" id="echeancierCalcToggle">
+              <span class="echeancier-calc-label">🧮 Calculateur de mensualités théoriques</span>
+              <span class="echeancier-calc-chevron open">▾</span>
+            </div>
+            <div id="echeancierCalcContent" class="echeancier-calc-content">
+              <div class="echeancier-calc-inputs">
+                <div class="echeancier-calc-field">
+                  <label for="calcDateDebut" class="calc-label">À partir du :</label>
+                  <input type="date" id="calcDateDebut" class="calc-input">
+                </div>
+                <div class="echeancier-calc-field">
+                  <label for="calcDateFin" class="calc-label">Jusqu'au :</label>
+                  <input type="date" id="calcDateFin" class="calc-input">
+                </div>
+              </div>
+              <div class="echeancier-calc-presets">
+                <button type="button" class="calc-preset-chip" id="calcPresetAll">Tout l'échéancier</button>
+                <button type="button" class="calc-preset-chip" id="calcPreset1Year">1 an</button>
+                <button type="button" class="calc-preset-chip" id="calcPresetYtd">Année en cours</button>
+              </div>
+              <div id="echeancierCalcResultBox" class="echeancier-calc-result-box">
+                <div class="echeancier-calc-result-header">
+                  <div class="calc-result-title-group">
+                    <span class="calc-result-tag">Total théorique dû</span>
+                    <span id="calcTotalCount" class="calc-count-badge">0 mensualité</span>
+                  </div>
+                  <button type="button" id="copyCalcResultBtn" class="copy-button" title="Copier le détail du calcul" aria-label="Copier le calcul">📋 Copier</button>
+                </div>
+                <div class="echeancier-calc-total-wrapper">
+                  <span id="calcTotalAmount" class="calc-total-amount highlight-cyan">0,00 €</span>
+                </div>
+                <div id="calcBreakdownList" class="calc-breakdown-list">
+                  <!-- Lignes détaillées de chaque période -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- Section Données SGE Enedis -->
       <div id="sgeCard" class="sge-card">

@@ -831,6 +831,369 @@ body.mode-window #detachBtn {
 }
 
 /* ========================================================
+   Section Échéancier de Paiement
+   ======================================================== */
+.echeancier-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.echeancier-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15), rgba(236, 72, 153, 0.1));
+  border-bottom: 1px solid var(--border-color);
+}
+
+.echeancier-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.echeancier-icon { font-size: 16px; }
+
+.echeancier-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.echeancier-content-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.echeancier-current-box {
+  background: var(--bg-card-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  border: 1px solid rgba(139, 92, 246, 0.25);
+}
+
+.echeancier-current-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.echeancier-tag {
+  background: rgba(139, 92, 246, 0.2);
+  color: #c4b5fd;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.echeancier-depuis {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.echeancier-current-values {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.echeancier-main-montant {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.echeancier-main-quand {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.echeancier-historique-box {
+  border-top: 1px solid var(--border-color);
+  padding-top: 8px;
+}
+
+.echeancier-historique-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  padding: 6px 4px;
+  border-radius: var(--radius-sm);
+  transition: background 0.2s;
+}
+
+.echeancier-historique-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.echeancier-historique-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.echeancier-historique-chevron {
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: transform 0.2s;
+}
+
+.echeancier-historique-chevron.open {
+  transform: rotate(90deg);
+}
+
+.echeancier-historique-content {
+  margin-top: 6px;
+}
+
+.echeancier-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.echeancier-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.echeancier-table td {
+  padding: 5px 8px;
+  color: var(--text-main);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.echeancier-table tr:last-child td {
+  border-bottom: none;
+}
+
+.echeancier-table tr.echeancier-row-active td {
+  color: var(--accent-cyan);
+  font-weight: 600;
+}
+
+/* ========================================================
+   Calculateur de Mensualités Théoriques
+   ======================================================== */
+.echeancier-calc-box {
+  border-top: 1px solid var(--border-color);
+  padding-top: 10px;
+  margin-top: 8px;
+}
+
+.echeancier-calc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  padding: 6px 4px;
+  border-radius: var(--radius-sm);
+  transition: background 0.2s;
+}
+
+.echeancier-calc-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.echeancier-calc-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.echeancier-calc-chevron {
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: transform 0.2s;
+}
+
+.echeancier-calc-chevron.closed {
+  transform: rotate(-90deg);
+}
+
+.echeancier-calc-content {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.echeancier-calc-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.echeancier-calc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.calc-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.calc-input {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  color: var(--text-main);
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s;
+  color-scheme: dark;
+}
+
+.calc-input:focus {
+  border-color: var(--accent-cyan);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.echeancier-calc-presets {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.calc-preset-chip {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 3px 9px;
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.calc-preset-chip:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-main);
+  border-color: var(--accent-cyan);
+}
+
+.calc-preset-chip.active {
+  background: rgba(0, 245, 255, 0.15);
+  color: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+}
+
+.echeancier-calc-result-box {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.echeancier-calc-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.calc-result-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.calc-result-tag {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.calc-count-badge {
+  background: rgba(0, 245, 255, 0.12);
+  color: var(--accent-cyan);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+
+.echeancier-calc-total-wrapper {
+  margin: 2px 0;
+}
+
+.calc-total-amount {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+.calc-breakdown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 6px;
+}
+
+.calc-breakdown-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  padding: 2px 0;
+}
+
+.calc-breakdown-period {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.calc-breakdown-dates {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.calc-breakdown-formula {
+  font-size: 11px;
+  color: var(--text-main);
+  font-weight: 500;
+}
+
+.calc-breakdown-subtotal {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-pink);
+}
+
+/* ========================================================
    Section Données SGE Enedis
    ======================================================== */
 .sge-card {
