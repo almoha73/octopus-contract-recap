@@ -166,6 +166,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // État SGE courant pour le récapitulatif
   let currentSgeData = null;
+  let activeSgeFetchPrm = null;
 
   const copySummaryBtn = document.getElementById("copySummaryBtn");
   const copyFeedback = document.getElementById("copyFeedback");
@@ -1333,6 +1334,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!prm || prm === "-") return;
     const prmStr = String(prm).trim();
 
+    // Protection contre les déclenchements multiples concurrents
+    if (activeSgeFetchPrm === prmStr) {
+      console.log(`[Popup] Récupération SGE déjà en cours pour ${prmStr}`);
+      return;
+    }
+    activeSgeFetchPrm = prmStr;
+
     // Noter l'onglet et la fenêtre actuels de l'extension pour garder le focus
     const currentTab = await chrome.tabs.getCurrent().catch(() => null);
     const currentWin = await chrome.windows.getCurrent().catch(() => null);
@@ -1416,6 +1424,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const msgSpan = sgeEmptyMessage.querySelector("span");
             if (msgSpan) msgSpan.textContent = "⏳ SGE met du temps à répondre. Cliquez sur ⚡ Récupérer dès que SGE est chargé.";
           }
+          activeSgeFetchPrm = null;
           return;
         }
       } else {
@@ -1438,6 +1447,8 @@ document.addEventListener("DOMContentLoaded", () => {
       type: "FETCH_SGE_DATA",
       payload: { prm: prmStr, bypassCache: bypassCache }
     }, async (response) => {
+      activeSgeFetchPrm = null;
+
       // 4. FERMETURE AUTOMATIQUE DE L'ONGLET SGE TEMPORAIRE
       if (openedSgeTabId) {
         try {
@@ -2066,6 +2077,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (detailsCard) detailsCard.style.display = "none";
                 if (consoCard) consoCard.style.display = "none";
                 if (actionsFooter) actionsFooter.style.display = "none";
+                if (sgeCard) sgeCard.style.display = "";
+                fetchSgeForCurrentContract(fallbackPrm, false);
               } else {
                 showError(errorMsg, response?.authRequired);
               }
@@ -2536,7 +2549,32 @@ document.addEventListener("DOMContentLoaded", () => {
    */
   function handleContractsResult(contracts) {
     if (!contracts || contracts.length === 0) {
-      showError("Aucun contrat trouvé pour ce compte.");
+      // Même sans contrat actif retourné par l'API, récupérer automatiquement SGE via le PRM de la page
+      let fallbackPrm = null;
+      if (activeTabContext?.propertyMapping) {
+        for (const mapping of activeTabContext.propertyMapping) {
+          if (mapping.prm && /^\d{14}$/.test(mapping.prm)) {
+            fallbackPrm = mapping.prm;
+            break;
+          }
+        }
+      }
+      if (fallbackPrm) {
+        showError("Aucun contrat trouvé (activation en cours ?). Données SGE disponibles ci-dessous.");
+        contentState.classList.remove("hidden");
+        const heroCard = document.querySelector(".hero-card");
+        const detailsCard = document.querySelector(".details-card");
+        const consoCard = document.querySelector(".conso-card");
+        const actionsFooter = document.querySelector(".actions-footer");
+        if (heroCard) heroCard.style.display = "none";
+        if (detailsCard) detailsCard.style.display = "none";
+        if (consoCard) consoCard.style.display = "none";
+        if (actionsFooter) actionsFooter.style.display = "none";
+        if (sgeCard) sgeCard.style.display = "";
+        fetchSgeForCurrentContract(fallbackPrm, false);
+      } else {
+        showError("Aucun contrat trouvé pour ce compte.");
+      }
       return;
     }
 
@@ -2710,6 +2748,11 @@ document.addEventListener("DOMContentLoaded", () => {
     // Rafraîchir l'échéancier pour le nouveau contrat (sans re-fetch, juste re-render)
     if (cachedPaymentData) {
       renderEcheancierForContract(c.prm);
+    }
+
+    // Récupération automatique et transparente des données SGE Enedis dès l'ouverture
+    if (c.prm && /^\d{14}$/.test(String(c.prm)) && (!c.typeEnergie || !c.typeEnergie.toLowerCase().includes("gaz"))) {
+      fetchSgeForCurrentContract(c.prm, false);
     }
   }
 

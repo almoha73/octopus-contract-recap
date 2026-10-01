@@ -525,13 +525,15 @@ Pour éliminer 100 % des risques de blocage tout en automatisant le flux, l'exte
 - L'extension n'invente aucune session et ne contourne aucune passerelle.
 - Elle utilise le bouton officiel de la page Kraken pour démarrer le flux SSO Enedis légitime.
 
-### B. Clic Automatique Ciblé par PRM (Compatible Multi-Logements)
-Lors d'un clic sur **« ⚡ Récupérer les données SGE »** :
-1. **Vérification d'onglet existant :** Si un onglet SGE correspondant au PRM est déjà ouvert, l'extension lit immédiatement les données sans rien ouvrir.
-2. **Localisation précise du bouton Kraken :** Si aucun onglet SGE n'est ouvert :
+### B. Déclenchement Automatique dès l'Ouverture & Clic Ciblé par PRM
+Dès que le conseiller clique sur l'icône de l'extension pour ouvrir la synthèse :
+1. **Lancement automatique :** L'extension déclenche immédiatement la récupération SGE en tâche de fond pour le contrat/PRM sélectionné, sans action manuelle requise.
+2. **Vérification du cache (0 ms) :** Si les données SGE du PRM ont été récupérées il y a moins de 30 minutes, elles s'affichent instantanément à 0 ms sans ouvrir aucun onglet.
+3. **Localisation précise du bouton Kraken :** Si les données ne sont pas en cache et qu'aucun onglet SGE n'est ouvert :
    - L'extension inspecte la fiche Kraken et identifie le conteneur du logement correspondant exactement au PRM sélectionné (ex : `24349638046203` ou `50065050734003`).
    - Elle localise le bouton violet officiel **`[ ↗ SGE ]`** de ce bloc (en ignorant strictement le bouton voisin *Énédis*).
    - Elle déclenche un clic natif unique dans le cadre principal de la page Kraken.
+4. **Bouton d'actualisation manuel :** Le bouton « 🔄 Actualiser les données SGE » reste disponible à tout moment pour forcer un rafraîchissement en direct (`bypassCache: true`).
 
 ### C. Maintien du Focus & Fermeture Automatique de l'Onglet SGE
 1. **Maintien du focus sur l'extension :**
