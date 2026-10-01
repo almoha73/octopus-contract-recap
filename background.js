@@ -2384,14 +2384,113 @@ const SGE_API_BASE = "https://mfa.microapps.enedis.fr/prm/api/v1";
 
 /**
  * Récupère les données techniques SGE (alimentation + comptage) pour un PRM donné.
- * Stratégie : ouvre un onglet temporaire sur sge.enedis.fr, y injecte un fetch first-party
- * vers les APIs microapps Enedis (cookies SameSite envoyés), puis ferme l'onglet.
+ * Stratégie SAFE : détecte un onglet sge.enedis.fr DÉJÀ OUVERT par l'utilisatrice
+ * et y injecte les appels fetch first-party (cookies SameSite envoyés naturellement).
+ * N'ouvre JAMAIS de nouvel onglet SGE — zéro risque de corruption de session TrustBuilder.
  * @param {Object} payload - { prm: string, bypassCache?: boolean }
  * @returns {Promise<Object>} Données SGE formatées
  */
 async function handleFetchSgeData(payload) {
-  // Désactivé pour garantir zéro interférence avec l'authentification TrustBuilder / Enedis SGE
-  throw new Error("L'interrogation SGE est temporairement désactivée.");
+  const { prm, bypassCache } = payload || {};
+
+  if (!prm || String(prm).length !== 14) {
+    throw new Error("Numéro PRM invalide (14 chiffres attendus)");
+  }
+
+  const prmStr = String(prm);
+
+  // 1. Vérifier le cache local SGE (30 min de validité)
+  if (!bypassCache) {
+    try {
+      const cacheKey = `sge_cache_${prmStr}`;
+      const stored = await chrome.storage.local.get([cacheKey]);
+      const item = stored[cacheKey];
+      if (item && item.data && (Date.now() - (item.cachedAt || 0)) < SGE_CACHE_TTL_MS) {
+        console.log(`[Background] ⚡ SGE depuis cache pour PRM ${prmStr}`);
+        return item.data;
+      }
+    } catch (_) {}
+  }
+
+  // 2. Chercher un onglet SGE déjà ouvert par l'utilisatrice
+  //    On ne cherche que les onglets sur sge.enedis.fr (jamais on en crée un)
+  let sgeTab = null;
+  try {
+    const tabs = await chrome.tabs.query({ url: "https://sge.enedis.fr/*" });
+    if (tabs && tabs.length > 0) {
+      // Préférer un onglet sur la consultation du bon PRM, sinon prendre le premier disponible
+      sgeTab = tabs.find(t => t.url && t.url.includes(prmStr)) || tabs[0];
+    }
+  } catch (err) {
+    console.warn("[Background] Erreur recherche onglet SGE :", err.message);
+  }
+
+  if (!sgeTab) {
+    const err = new Error(
+      `Aucun onglet SGE Enedis ouvert. Ouvrez d'abord la fiche SGE du PRM ${prmStr} depuis Kraken, puis relancez la récupération.`
+    );
+    err.noSgeTab = true;
+    throw err;
+  }
+
+  console.log(`[Background] 📡 Injection SGE dans onglet existant (id=${sgeTab.id}) pour PRM ${prmStr}`);
+
+  // 3. Injecter les appels API Enedis dans l'onglet SGE déjà ouvert
+  //    Les cookies SameSite=Lax de sge.enedis.fr sont envoyés automatiquement
+  let injectionResult = null;
+  try {
+    const [execRes] = await chrome.scripting.executeScript({
+      target: { tabId: sgeTab.id },
+      args: [prmStr, SGE_API_BASE],
+      func: async (prmId, apiBase) => {
+        const headers = { "Accept": "application/json" };
+
+        // Appels parallèles vers les 3 endpoints techniques Enedis
+        const [alimentationRes, comptageRes, contractuelRes] = await Promise.allSettled([
+          fetch(`${apiBase}/situations/alimentation/${prmId}`, { credentials: "include", headers }),
+          fetch(`${apiBase}/situations/comptage/${prmId}`, { credentials: "include", headers }),
+          fetch(`${apiBase}/situations/contractuelles/${prmId}`, { credentials: "include", headers })
+        ]);
+
+        const safeJson = async (res) => {
+          if (res.status === "fulfilled" && res.value.ok) {
+            try { return await res.value.json(); } catch (_) { return { error: "JSON invalide" }; }
+          }
+          return { error: res.reason?.message || (res.value ? `HTTP ${res.value.status}` : "Echec") };
+        };
+
+        return {
+          alimentation: await safeJson(alimentationRes),
+          comptage: await safeJson(comptageRes),
+          contractuel: await safeJson(contractuelRes)
+        };
+      }
+    });
+    injectionResult = execRes?.result;
+  } catch (err) {
+    throw new Error(`Impossible d'interroger SGE depuis l'onglet ouvert : ${err.message}`);
+  }
+
+  if (!injectionResult) {
+    throw new Error("Aucune donnée retournée par l'onglet SGE");
+  }
+
+  // 4. Formater et mettre en cache
+  const formatted = formatSgeData(
+    injectionResult.alimentation,
+    injectionResult.comptage,
+    injectionResult.contractuel,
+    prmStr
+  );
+
+  if (formatted.hasData) {
+    try {
+      const cacheKey = `sge_cache_${prmStr}`;
+      await chrome.storage.local.set({ [cacheKey]: { data: formatted, cachedAt: Date.now() } });
+    } catch (_) {}
+  }
+
+  return formatted;
 }
 
 /**

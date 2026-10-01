@@ -1194,14 +1194,21 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (!response || !response.success) {
+        const isNoTab = response?.error && response.error.includes("Aucun onglet SGE");
         if (badgeSgeStatus) {
-          badgeSgeStatus.textContent = response?.authRequired ? "Session expirée" : "Erreur";
-          badgeSgeStatus.className = "badge badge-danger";
+          badgeSgeStatus.textContent = isNoTab ? "Onglet SGE requis" : (response?.authRequired ? "Session expirée" : "Erreur");
+          badgeSgeStatus.className = isNoTab ? "badge badge-warning" : "badge badge-danger";
         }
         if (sgeEmptyMessage) {
           sgeEmptyMessage.classList.remove("hidden");
           const msgSpan = sgeEmptyMessage.querySelector("span");
-          if (msgSpan) msgSpan.textContent = "⚠️ " + (response?.error || "Erreur SGE inconnue");
+          if (msgSpan) {
+            if (isNoTab) {
+              msgSpan.textContent = "📋 Ouvrez d'abord la fiche SGE du client depuis Kraken (bouton 🔗), puis cliquez à nouveau sur ⚡ Récupérer.";
+            } else {
+              msgSpan.textContent = "⚠️ " + (response?.error || "Erreur SGE inconnue");
+            }
+          }
         }
         return;
       }
