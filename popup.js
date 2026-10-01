@@ -1777,8 +1777,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (detailsCard) detailsCard.style.display = "none";
                 if (consoCard) consoCard.style.display = "none";
                 if (actionsFooter) actionsFooter.style.display = "none";
-                if (sgeCard) sgeCard.style.display = "";
-                fetchSgeForCurrentContract(fallbackPrm, false);
               } else {
                 showError(errorMsg, response?.authRequired);
               }
@@ -2249,33 +2247,7 @@ document.addEventListener("DOMContentLoaded", () => {
    */
   function handleContractsResult(contracts) {
     if (!contracts || contracts.length === 0) {
-      // Même sans contrat, tenter de récupérer les données SGE via le PRM visible sur la page
-      let fallbackPrm = null;
-      if (activeTabContext?.propertyMapping) {
-        for (const mapping of activeTabContext.propertyMapping) {
-          if (mapping.prm && /^\d{14}$/.test(mapping.prm)) {
-            fallbackPrm = mapping.prm;
-            break;
-          }
-        }
-      }
-      if (fallbackPrm) {
-        showError("Aucun contrat trouvé (activation en cours ?). Données SGE disponibles ci-dessous.");
-        // Afficher le contentState avec seulement la section SGE visible
-        contentState.classList.remove("hidden");
-        const heroCard = document.querySelector(".hero-card");
-        const detailsCard = document.querySelector(".details-card");
-        const consoCard = document.querySelector(".conso-card");
-        const actionsFooter = document.querySelector(".actions-footer");
-        if (heroCard) heroCard.style.display = "none";
-        if (detailsCard) detailsCard.style.display = "none";
-        if (consoCard) consoCard.style.display = "none";
-        if (actionsFooter) actionsFooter.style.display = "none";
-        if (sgeCard) sgeCard.style.display = "";
-        fetchSgeForCurrentContract(fallbackPrm, false);
-      } else {
-        showError("Aucun contrat trouvé pour ce compte.");
-      }
+      showError("Aucun contrat trouvé pour ce compte.");
       return;
     }
 
@@ -2442,17 +2414,9 @@ document.addEventListener("DOMContentLoaded", () => {
     // Rendu du Suivi Conso Mensuel
     renderConsoDetails(c.consoMensuelle);
 
-    // Chargement automatique des données SGE pour ce PRM (si disponibles en cache)
-    if (c.prm && c.prm !== "-") {
-      // Réinitialiser l'état SGE pour le nouveau contrat
-      currentSgeData = null;
-      renderSgeDetails(null);
-      // Tenter le chargement (le cache SGE sera vérifié en premier dans le background)
-      fetchSgeForCurrentContract(c.prm, false);
-    } else {
-      currentSgeData = null;
-      renderSgeDetails(null);
-    }
+    // Réinitialiser l'état SGE pour le nouveau contrat
+    currentSgeData = null;
+    renderSgeDetails(null);
 
     // Rafraîchir l'échéancier pour le nouveau contrat (sans re-fetch, juste re-render)
     if (cachedPaymentData) {
