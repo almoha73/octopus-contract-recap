@@ -467,4 +467,83 @@ Afin de garantir un affichage instantané et éliminer toute latence perçue par
 5. **Préchargement proactif étendu (HTMX, History pushState & Tab Activation) :**
    L'écouteur `chrome.tabs.onUpdated` surveille `changeInfo.url` pour détecter les navigations dynamiques Kraken (HTMX / History API), amorçant en tâche de fond le cache des données avant même que le conseiller ne clique sur l'icône de l'extension.
 
+---
+
+## 10. Échéanciers de Paiement & Attribution Multi-Ledgers
+
+### A. Problématique des Multi-Ledgers sur Kraken
+Sur les comptes clients multi-logements ou ayant fait l'objet de modifications contractuelles, Kraken crée plusieurs *ledgers* (comptes comptables de facturation `L-XXXXXXXXXX`). Certains de ces ledgers sont clôturés ou contiennent un échéancier à 0,00 €, tandis que d'autres portent les mensualités actives réelles.
+
+Une simple attribution naïve par index ou par premier ledger trouvé menait à afficher `0,00 €` pour un logement actif ou à attribuer l'échéancier du logement A au logement B.
+
+### B. Algorithme de Résolution et d'Attribution
+1. **Extraction de tous les échéanciers :**
+   L'extension interroge l'endpoint partiel Kraken :
+   `/accounts/{accountNumber}/partial/payment-schedules/`
+   Elle en extrait l'ensemble des tables d'échéances et les classe par `ledgerId`.
+2. **Matching intelligent par logement :**
+   - L'extension analyse le DOM de Kraken pour construire la table de correspondance `propertyMapping` reliant chaque `propertyId` à son `agreementId`, son `prm` et son `ledgerId`.
+   - Si plusieurs ledgers sont associés à un même PRM ou compte, l'algorithme sélectionne en priorité absolue le ledger possédant :
+     - Au moins une échéance active (`isActive === true`)
+     - Un montant strictement positif (`parseScheduleMontant(r.montant) > 0`)
+3. **Restitution dans l'interface :**
+   - **Encart Mensualité en cours :** Montant TTC, date de prélèvement habituelle (ex: le 10 du mois), période de validité.
+   - **Tableau d'historique des échéanciers :** Tableau repliable affichant l'historique complet des plans de mensualisation avec dates d'application (`Du ... Au ...`), montants et statuts (*En cours*, *Terminé*).
+
+---
+
+## 11. Calculateur de Mensualités Dues depuis une Date
+
+### A. Cas d'Usage Métier
+Lors d'une régularisation, d'un litige sur des prélèvements ou d'une analyse d'impayés, les conseillers doivent régulièrement calculer le montant théorique total que le client aurait dû verser sur une période spécifique (ex : depuis le début de l'année, sur les 12 derniers mois ou depuis la souscription).
+
+### B. Moteur de Calcul Intégré
+Le composant `#echeancierCalcBox` intègre un moteur de calcul temporel précis :
+1. **Sélection de dates & Raccourcis 1 clic :**
+   - Sélecteurs HTML5 de date de début (`calcDateDebut`) et date de fin (`calcDateFin`).
+   - 3 raccourcis instantanés :
+     - **Tout l'échéancier :** Couvre l'ensemble de l'historique connu.
+     - **1 an :** Période glissante des 365 derniers jours jusqu'à aujourd'hui.
+     - **Année en cours :** Du 1er janvier de l'année en cours jusqu'à aujourd'hui.
+2. **Simulation par jour de prélèvement réel :**
+   - Le moteur prend en compte le jour exact de prélèvement configuré (ex: le 5, le 10 ou le 15 du mois).
+   - Il gère les mois courts (28, 29, 30 jours) et s'assure qu'une mensualité n'est comptabilisée que si sa date effective de prélèvement tombe dans la fenêtre choisie.
+3. **Ventilation multi-périodes :**
+   - Si le client a eu des montants d'échéances différents sur la période (ex : 4 mensualités à 65,47 € puis 6 mensualités à 56,17 €), le calculateur détaille chaque sous-période avec son sous-total et calcule la somme globale due.
+4. **Export 1 clic dans le presse-papier :**
+   - Un bouton dédié permet de copier instantanément le récapitulatif formaté (période, détail par tranche, total dû) pour l'insérer directement dans une note de dossier client ou un e-mail.
+
+---
+
+## 12. Intégration SGE Enedis Sécurisée, Clic Kraken Automatique & Auto-Fermeture
+
+### A. Sécurité Entreprise & Prévention des Conflits TrustBuilder MFA
+Le portail **SGE Enedis** (`sge.enedis.fr`) est protégé par une authentification forte obligatoire (TrustBuilder MFA).
+Dans les versions antérieures, l'ouverture en tâche de fond d'onglets invisibles (`active: false`) entrait en collision avec les sessions SSO et verrouillait l'accès SGE pour l'utilisateur.
+
+Pour éliminer 100 % des risques de blocage tout en automatisant le flux, l'extension applique une **stratégie de délégation first-party** :
+- L'extension n'invente aucune session et ne contourne aucune passerelle.
+- Elle utilise le bouton officiel de la page Kraken pour démarrer le flux SSO Enedis légitime.
+
+### B. Clic Automatique Ciblé par PRM (Compatible Multi-Logements)
+Lors d'un clic sur **« ⚡ Récupérer les données SGE »** :
+1. **Vérification d'onglet existant :** Si un onglet SGE correspondant au PRM est déjà ouvert, l'extension lit immédiatement les données sans rien ouvrir.
+2. **Localisation précise du bouton Kraken :** Si aucun onglet SGE n'est ouvert :
+   - L'extension inspecte la fiche Kraken et identifie le conteneur du logement correspondant exactement au PRM sélectionné (ex : `24349638046203` ou `50065050734003`).
+   - Elle localise le bouton violet officiel **`[ ↗ SGE ]`** de ce bloc (en ignorant strictement le bouton voisin *Énédis*).
+   - Elle déclenche un clic natif unique dans le cadre principal de la page Kraken.
+
+### C. Maintien du Focus & Fermeture Automatique de l'Onglet SGE
+1. **Maintien du focus sur l'extension :**
+   Dès que Chrome commence à ouvrir le nouvel onglet SGE, l'extension réactive immédiatement son propre onglet/fenêtre (`chrome.tabs.update(currentTab.id, { active: true })`). Le conseiller **ne quitte jamais son écran de travail** et ne subit aucun saut d'onglet intempestif.
+2. **Extraction dans le contexte first-party (`world: "MAIN"`) :**
+   Dès que l'onglet SGE a achevé son chargement et son authentification TrustBuilder, l'extension interroge en direct les 3 APIs microapps Enedis avec les cookies de session natifs :
+   - `GET https://mfa.microapps.enedis.fr/prm/api/v1/situation-alimentation/{prm}`
+   - `GET https://mfa.microapps.enedis.fr/prm/api/v1/situation-comptage/{prm}`
+   - `GET https://mfa.microapps.enedis.fr/prm/api/v1/situations-contractuelles/{prm}`
+3. **Fermeture automatique de l'onglet SGE :**
+   Dès que les données techniques sont extraites et validées, l'onglet SGE temporaire est **automatiquement fermé** par l'extension (`chrome.tabs.remove(openedSgeTabId)`). Aucun onglet parasite ne reste ouvert dans le navigateur.
+4. **Mise en cache locale 30 minutes :**
+   Les données techniques SGE (puissance souscrite, formule tarifaire, calibre disjoncteur, plages HC Enedis, état d'alimentation) sont mises en cache pour 30 minutes, offrant une restitution instantanée lors des consultations suivantes du même compte.
+
 
