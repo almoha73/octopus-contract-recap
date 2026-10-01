@@ -1171,80 +1171,90 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   /**
-   * Localise et clique sur le bouton [ ↗ SGE ] correspondant au PRM sur la page Kraken
+   * Localise et clique sur le bouton [ ↗ SGE ] correspondant au PRM sur la page Kraken (1 seul clic propre)
    */
   async function triggerSgeClickOnKraken(krakenTabId, prmId) {
     if (!krakenTabId) return { success: false, reason: "Onglet Kraken non trouvé" };
     try {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: krakenTabId, allFrames: true },
-        args: [String(prmId || "").trim()],
-        func: (prm) => {
-          const isSgeBtn = (el) => {
-            if (!el) return false;
-            const txt = (el.innerText || el.textContent || "").trim();
-            // Doit matcher le mot SGE et ne pas contenir Énédis / Enedis
-            const hasSge = /\bSGE\b/i.test(txt);
-            const hasEnedis = /énedis|enedis/i.test(txt);
-            if (hasSge && !hasEnedis) return true;
+      const clickFunc = (prm) => {
+        const isSgeBtn = (el) => {
+          if (!el) return false;
+          const txt = (el.innerText || el.textContent || "").trim();
+          // Doit matcher le mot SGE et ne pas contenir Énédis / Enedis
+          const hasSge = /\bSGE\b/i.test(txt);
+          const hasEnedis = /énedis|enedis/i.test(txt);
+          if (hasSge && !hasEnedis) return true;
 
-            const href = (el.getAttribute("href") || "").toLowerCase();
-            const title = (el.getAttribute("title") || "").toLowerCase();
-            const aria = (el.getAttribute("aria-label") || "").toLowerCase();
-            if (href.includes("sge.enedis.fr") || (title.includes("sge") && !title.includes("enedis")) || (aria.includes("sge") && !aria.includes("enedis"))) {
-              return true;
-            }
-            return false;
-          };
+          const href = (el.getAttribute("href") || "").toLowerCase();
+          const title = (el.getAttribute("title") || "").toLowerCase();
+          const aria = (el.getAttribute("aria-label") || "").toLowerCase();
+          if (href.includes("sge.enedis.fr") || (title.includes("sge") && !title.includes("enedis")) || (aria.includes("sge") && !aria.includes("enedis"))) {
+            return true;
+          }
+          return false;
+        };
 
-          let targetBtn = null;
+        let targetBtn = null;
 
-          // 1. Recherche ciblée par proximité avec le PRM (gestion multi-logements)
-          if (prm && prm.length === 14) {
-            const allEls = [...document.querySelectorAll("*")];
-            const prmEls = allEls.filter(el => el.children.length === 0 && (el.textContent || "").includes(prm));
+        // 1. Recherche ciblée par proximité avec le PRM (gestion multi-logements)
+        if (prm && prm.length === 14) {
+          const allEls = [...document.querySelectorAll("*")];
+          const prmEls = allEls.filter(el => el.children.length === 0 && (el.textContent || "").includes(prm));
 
-            for (const pEl of prmEls) {
-              let parent = pEl.parentElement;
-              for (let depth = 0; depth < 8 && parent && parent !== document.body; depth++) {
-                const candidates = parent.querySelectorAll("a, button, [role='button'], div[role='button']");
-                for (const c of candidates) {
-                  if (isSgeBtn(c)) {
-                    targetBtn = c;
-                    break;
-                  }
+          for (const pEl of prmEls) {
+            let parent = pEl.parentElement;
+            for (let depth = 0; depth < 8 && parent && parent !== document.body; depth++) {
+              const candidates = parent.querySelectorAll("a, button, [role='button'], div[role='button']");
+              for (const c of candidates) {
+                if (isSgeBtn(c)) {
+                  targetBtn = c;
+                  break;
                 }
-                if (targetBtn) break;
-                parent = parent.parentElement;
               }
               if (targetBtn) break;
+              parent = parent.parentElement;
             }
+            if (targetBtn) break;
           }
-
-          // 2. Recherche globale sur la page si non trouvé à côté du PRM
-          if (!targetBtn) {
-            const allCandidates = [...document.querySelectorAll("a, button, [role='button'], div[role='button']")];
-            targetBtn = allCandidates.find(c => isSgeBtn(c));
-          }
-
-          if (targetBtn) {
-            try { targetBtn.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (_) {}
-            try { targetBtn.focus(); } catch (_) {}
-            try { targetBtn.click(); } catch (_) {}
-
-            const opts = { bubbles: true, cancelable: true, view: window };
-            targetBtn.dispatchEvent(new MouseEvent("mousedown", opts));
-            targetBtn.dispatchEvent(new MouseEvent("mouseup", opts));
-            targetBtn.dispatchEvent(new MouseEvent("click", opts));
-
-            return { success: true, text: (targetBtn.innerText || targetBtn.textContent || "").trim() };
-          }
-
-          return { success: false, reason: "Bouton [ ↗ SGE ] introuvable sur la page Kraken" };
         }
+
+        // 2. Recherche globale sur la page si non trouvé à côté du PRM
+        if (!targetBtn) {
+          const allCandidates = [...document.querySelectorAll("a, button, [role='button'], div[role='button']")];
+          targetBtn = allCandidates.find(c => isSgeBtn(c));
+        }
+
+        if (targetBtn) {
+          try { targetBtn.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (_) {}
+          try { targetBtn.focus(); } catch (_) {}
+          // Uniquement le clic natif (évite d'ouvrir 2 onglets en doublant avec dispatchEvent)
+          targetBtn.click();
+
+          return { success: true, text: (targetBtn.innerText || targetBtn.textContent || "").trim() };
+        }
+
+        return { success: false, reason: "Bouton [ ↗ SGE ] introuvable sur la page Kraken" };
+      };
+
+      // Tenter d'abord dans le frame principal uniquement (évite les doublons d'iframes)
+      let results = await chrome.scripting.executeScript({
+        target: { tabId: krakenTabId },
+        args: [String(prmId || "").trim()],
+        func: clickFunc
       });
 
-      const found = results.find(r => r?.result?.success);
+      if (results?.[0]?.result?.success) {
+        return results[0].result;
+      }
+
+      // Si pas trouvé dans le frame principal, chercher dans les sous-frames (1 seule exécution)
+      results = await chrome.scripting.executeScript({
+        target: { tabId: krakenTabId, allFrames: true },
+        args: [String(prmId || "").trim()],
+        func: clickFunc
+      });
+
+      const found = results?.find(r => r?.result?.success);
       return found?.result || { success: false, reason: "Bouton [ ↗ SGE ] non trouvé sur la page Kraken" };
     } catch (err) {
       return { success: false, reason: err.message };
@@ -1252,41 +1262,80 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   /**
-   * Attend qu'un onglet SGE soit disponible et complètement chargé
+   * Attend qu'un onglet SGE soit disponible et complètement chargé,
+   * tout en maintenant le focus sur l'extension.
+   * Retourne l'objet tab et indique s'il s'agit d'un onglet nouvellement créé.
    */
-  async function waitForSgeTabReady(prmId, maxWaitMs = 15000) {
+  async function waitForSgeTabReady(prmId, tabIdsBefore, extensionTab, maxWaitMs = 15000) {
     const prmStr = String(prmId || "").trim();
     const startTime = Date.now();
-    const pollInterval = 500;
+    const pollInterval = 400;
+
+    let detectedTabId = null;
 
     while (Date.now() - startTime < maxWaitMs) {
       try {
         const allTabs = await chrome.tabs.query({});
-        // Privilégier un onglet SGE contenant le PRM dans son URL, sinon n'importe quel onglet SGE
-        const tab = allTabs.find(t => t.url && t.url.includes("sge.enedis.fr") && t.url.includes(prmStr))
-                 || allTabs.find(t => t.url && t.url.includes("sge.enedis.fr"));
 
-        if (tab && tab.status === "complete") {
-          // Attendre 1 seconde supplémentaire pour l'initialisation des microapps
-          await new Promise(r => setTimeout(r, 1000));
-          return tab;
+        // 1. Chercher d'abord un nouvel onglet créé après le clic
+        const newTab = allTabs.find(t => !tabIdsBefore.has(t.id) && (
+          (t.url && t.url.includes("sge.enedis.fr")) ||
+          (t.pendingUrl && t.pendingUrl.includes("sge.enedis.fr")) ||
+          (!t.url || t.url === "about:blank" || t.url.includes("chrome://newtab"))
+        ));
+
+        if (newTab) {
+          detectedTabId = newTab.id;
+
+          // Maintenir le focus sur l'extension pour ne pas basculer sur SGE
+          if (extensionTab?.id && newTab.active) {
+            try { await chrome.tabs.update(extensionTab.id, { active: true }); } catch (_) {}
+          }
+
+          // Vérifier si la page SGE a fini de charger
+          if (newTab.url && newTab.url.includes("sge.enedis.fr") && newTab.status === "complete") {
+            await new Promise(r => setTimeout(r, 1000));
+            return { tab: newTab, isNew: true, tabId: newTab.id };
+          }
+        }
+
+        // 2. Si pas de nouveau tab mais un onglet SGE existant
+        if (!detectedTabId) {
+          const existingTab = allTabs.find(t => t.url && t.url.includes("sge.enedis.fr") && t.url.includes(prmStr))
+                           || allTabs.find(t => t.url && t.url.includes("sge.enedis.fr"));
+          if (existingTab && existingTab.status === "complete") {
+            return { tab: existingTab, isNew: false, tabId: existingTab.id };
+          }
         }
       } catch (_) {}
 
       await new Promise(r => setTimeout(r, pollInterval));
     }
+
+    if (detectedTabId) {
+      try {
+        const t = await chrome.tabs.get(detectedTabId);
+        return { tab: t, isNew: true, tabId: detectedTabId };
+      } catch (_) {}
+    }
+
     return null;
   }
 
   /**
    * Récupère les données SGE pour le PRM donné et met à jour l'interface.
-   * Si aucun onglet SGE n'est ouvert pour ce PRM, clique automatiquement sur le bouton SGE de Kraken !
+   * Si aucun onglet SGE n'est ouvert pour ce PRM, clique automatiquement sur le bouton SGE de Kraken,
+   * reste sur l'extension, extrait les données puis referme automatiquement l'onglet SGE !
    * @param {string} prm - Le numéro PRM (14 chiffres)
    * @param {boolean} bypassCache - Si true, ignore le cache
    */
   async function fetchSgeForCurrentContract(prm, bypassCache = false) {
     if (!prm || prm === "-") return;
     const prmStr = String(prm).trim();
+
+    // Noter l'onglet et la fenêtre actuels de l'extension pour garder le focus
+    const currentTab = await chrome.tabs.getCurrent().catch(() => null);
+    const currentWin = await chrome.windows.getCurrent().catch(() => null);
 
     // État de chargement initial
     if (badgeSgeStatus) {
@@ -1301,31 +1350,28 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (sgeEmptyMessage) sgeEmptyMessage.classList.add("hidden");
 
-    // 1. Vérifier si un onglet SGE pour ce PRM est DÉJÀ ouvert et prêt
-    let sgeTabAvailable = false;
-    try {
-      const allTabs = await chrome.tabs.query({});
-      const existingTab = allTabs.find(t => t.url && t.url.includes("sge.enedis.fr") && t.url.includes(prmStr))
-                       || allTabs.find(t => t.url && t.url.includes("sge.enedis.fr"));
-      if (existingTab && existingTab.status === "complete") {
-        sgeTabAvailable = true;
-      }
-    } catch (_) {}
+    // 1. Lister les onglets existants avant toute action
+    const tabsBefore = await chrome.tabs.query({});
+    const tabIdsBefore = new Set(tabsBefore.map(t => t.id));
 
-    // 2. Si aucun onglet SGE n'est ouvert, simuler le clic sur le bouton [ ↗ SGE ] de Kraken
-    if (!sgeTabAvailable) {
+    // Vérifier si un onglet SGE pour ce PRM est DÉJÀ ouvert et prêt
+    const existingTab = tabsBefore.find(t => t.url && t.url.includes("sge.enedis.fr") && t.url.includes(prmStr));
+    let openedSgeTabId = null;
+
+    // 2. Si aucun onglet SGE dédié n'est ouvert, simuler le clic sur le bouton [ ↗ SGE ] de Kraken
+    if (!existingTab || existingTab.status !== "complete") {
       if (badgeSgeStatus) {
         badgeSgeStatus.textContent = "Ouverture SGE...";
         badgeSgeStatus.className = "badge badge-info";
       }
       if (syncSgeBtn) {
         const btnSpan = syncSgeBtn.querySelector("span");
-        if (btnSpan) btnSpan.textContent = "Ouverture SGE via Kraken...";
+        if (btnSpan) btnSpan.textContent = "Ouverture SGE en arrière-plan...";
       }
       if (sgeEmptyMessage) {
         sgeEmptyMessage.classList.remove("hidden");
         const msgSpan = sgeEmptyMessage.querySelector("span");
-        if (msgSpan) msgSpan.textContent = "🚀 Clic automatique sur le bouton [ ↗ SGE ] de la fiche Kraken...";
+        if (msgSpan) msgSpan.textContent = "🚀 Clic sur le bouton [ ↗ SGE ] dans Kraken...";
       }
 
       const krakenTabId = await getKrakenTabId();
@@ -1334,16 +1380,28 @@ document.addEventListener("DOMContentLoaded", () => {
       if (clickRes.success) {
         if (sgeEmptyMessage) {
           const msgSpan = sgeEmptyMessage.querySelector("span");
-          if (msgSpan) msgSpan.textContent = "⏳ Onglet SGE en cours de chargement (authentification TrustBuilder)...";
+          if (msgSpan) msgSpan.textContent = "⏳ Chargement de SGE (TrustBuilder) en arrière-plan...";
         }
         if (syncSgeBtn) {
           const btnSpan = syncSgeBtn.querySelector("span");
           if (btnSpan) btnSpan.textContent = "Attente TrustBuilder/SGE...";
         }
 
-        // Attente active de l'onglet SGE (jusqu'à 15 secondes)
-        const readyTab = await waitForSgeTabReady(prmStr, 15000);
-        if (!readyTab) {
+        // Attente active de l'onglet SGE tout en maintenant le focus sur l'extension
+        const readyInfo = await waitForSgeTabReady(prmStr, tabIdsBefore, currentTab, 15000);
+        if (readyInfo?.isNew) {
+          openedSgeTabId = readyInfo.tabId;
+        }
+
+        // Garder le focus sur l'extension
+        if (currentTab?.id) {
+          try { await chrome.tabs.update(currentTab.id, { active: true }); } catch (_) {}
+        }
+        if (currentWin?.id) {
+          try { await chrome.windows.update(currentWin.id, { focused: true }); } catch (_) {}
+        }
+
+        if (!readyInfo?.tab) {
           if (badgeSgeStatus) {
             badgeSgeStatus.textContent = "En attente";
             badgeSgeStatus.className = "badge badge-warning";
@@ -1356,7 +1414,7 @@ document.addEventListener("DOMContentLoaded", () => {
           }
           if (sgeEmptyMessage) {
             const msgSpan = sgeEmptyMessage.querySelector("span");
-            if (msgSpan) msgSpan.textContent = "⏳ L'onglet SGE s'ouvre. Dès que vous êtes authentifié sur SGE, cliquez sur ⚡ Récupérer.";
+            if (msgSpan) msgSpan.textContent = "⏳ SGE met du temps à répondre. Cliquez sur ⚡ Récupérer dès que SGE est chargé.";
           }
           return;
         }
@@ -1365,7 +1423,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // 3. Récupération des données depuis l'onglet SGE maintenant ouvert
+    // 3. Récupération des données depuis l'onglet SGE
     if (badgeSgeStatus) {
       badgeSgeStatus.textContent = "Lecture SGE...";
       badgeSgeStatus.className = "badge badge-info";
@@ -1379,7 +1437,23 @@ document.addEventListener("DOMContentLoaded", () => {
     chrome.runtime.sendMessage({
       type: "FETCH_SGE_DATA",
       payload: { prm: prmStr, bypassCache: bypassCache }
-    }, (response) => {
+    }, async (response) => {
+      // 4. FERMETURE AUTOMATIQUE DE L'ONGLET SGE TEMPORAIRE
+      if (openedSgeTabId) {
+        try {
+          await chrome.tabs.remove(openedSgeTabId);
+          console.log("[Popup] Onglet SGE refermé automatiquement avec succès :", openedSgeTabId);
+        } catch (_) {}
+      }
+
+      // S'assurer que le focus reste sur l'extension
+      if (currentTab?.id) {
+        try { await chrome.tabs.update(currentTab.id, { active: true }); } catch (_) {}
+      }
+      if (currentWin?.id) {
+        try { await chrome.windows.update(currentWin.id, { focused: true }); } catch (_) {}
+      }
+
       // Restaurer le bouton
       if (syncSgeBtn) {
         syncSgeBtn.disabled = false;
