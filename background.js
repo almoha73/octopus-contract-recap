@@ -2412,81 +2412,157 @@ async function handleFetchSgeData(payload) {
     } catch (_) {}
   }
 
-  // 2. Chercher un onglet SGE déjà ouvert par l'utilisatrice
-  //    On ne cherche que les onglets sur sge.enedis.fr (jamais on en crée un)
+  // 2. Chercher un onglet SGE déjà ouvert par l'utilisatrice (dans toutes les fenêtres)
   let sgeTab = null;
   try {
-    const tabs = await chrome.tabs.query({ url: "https://sge.enedis.fr/*" });
-    if (tabs && tabs.length > 0) {
-      // Préférer un onglet sur la consultation du bon PRM, sinon prendre le premier disponible
-      sgeTab = tabs.find(t => t.url && t.url.includes(prmStr)) || tabs[0];
-    }
+    const allTabs = await chrome.tabs.query({});
+    // Privilégier l'onglet SGE qui consulte déjà ce PRM, sinon n'importe quel onglet SGE actif/ouvert
+    sgeTab = allTabs.find(t => t.url && t.url.includes("sge.enedis.fr") && t.url.includes(prmStr))
+          || allTabs.find(t => t.url && t.url.includes("sge.enedis.fr"));
   } catch (err) {
     console.warn("[Background] Erreur recherche onglet SGE :", err.message);
   }
 
   if (!sgeTab) {
     const err = new Error(
-      `Aucun onglet SGE Enedis ouvert. Ouvrez d'abord la fiche SGE du PRM ${prmStr} depuis Kraken, puis relancez la récupération.`
+      `Aucun onglet SGE Enedis ouvert. Ouvrez d'abord la fiche SGE du PRM ${prmStr} depuis Kraken (bouton 🔗), puis relancez la récupération.`
     );
     err.noSgeTab = true;
     throw err;
   }
 
-  console.log(`[Background] 📡 Injection SGE dans onglet existant (id=${sgeTab.id}) pour PRM ${prmStr}`);
+  console.log(`[Background] 📡 Utilisation de l'onglet SGE existant (id=${sgeTab.id}, url=${sgeTab.url}) pour PRM ${prmStr}`);
 
-  // 3. Injecter les appels API Enedis dans l'onglet SGE déjà ouvert
-  //    Les cookies SameSite=Lax de sge.enedis.fr sont envoyés automatiquement
-  let injectionResult = null;
+  // Si l'onglet est encore en train de charger, attendre qu'il soit prêt
+  if (sgeTab.status !== "complete") {
+    await waitForTabComplete(sgeTab.id, 6000);
+  }
+
+  // 3. Injecter un script dans le contexte first-party SGE (world: "MAIN")
+  const RESULT_ELEMENT_ID = `__ext_sge_result_${Date.now()}__`;
+
   try {
-    const [execRes] = await chrome.scripting.executeScript({
+    await chrome.scripting.executeScript({
       target: { tabId: sgeTab.id },
-      args: [prmStr, SGE_API_BASE],
-      func: async (prmId, apiBase) => {
-        const headers = { "Accept": "application/json" };
-
-        // Appels parallèles vers les 3 endpoints techniques Enedis
-        const [alimentationRes, comptageRes, contractuelRes] = await Promise.allSettled([
-          fetch(`${apiBase}/situations/alimentation/${prmId}`, { credentials: "include", headers }),
-          fetch(`${apiBase}/situations/comptage/${prmId}`, { credentials: "include", headers }),
-          fetch(`${apiBase}/situations/contractuelles/${prmId}`, { credentials: "include", headers })
-        ]);
-
-        const safeJson = async (res) => {
-          if (res.status === "fulfilled" && res.value.ok) {
-            try { return await res.value.json(); } catch (_) { return { error: "JSON invalide" }; }
+      world: "MAIN",
+      func: (prmId, apiBase, resultId) => {
+        const fetchApi = async (endpoint) => {
+          const url = `${apiBase}/${endpoint}/${prmId}`;
+          const res = await fetch(url, {
+            method: "GET",
+            credentials: "include",
+            headers: { "Accept": "application/json" }
+          });
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status} pour ${endpoint}`);
           }
-          return { error: res.reason?.message || (res.value ? `HTTP ${res.value.status}` : "Echec") };
+          return res.json();
         };
 
-        return {
-          alimentation: await safeJson(alimentationRes),
-          comptage: await safeJson(comptageRes),
-          contractuel: await safeJson(contractuelRes)
-        };
-      }
+        Promise.all([
+          fetchApi("situation-alimentation").catch(e => ({ error: e.message })),
+          fetchApi("situation-comptage").catch(e => ({ error: e.message })),
+          fetchApi("situations-contractuelles").catch(e => ({ error: e.message }))
+        ]).then(([alimentation, comptage, contractuel]) => {
+          const result = { alimentation, comptage, contractuel, done: true };
+          let el = document.getElementById(resultId);
+          if (!el) {
+            el = document.createElement("div");
+            el.id = resultId;
+            el.style.display = "none";
+            document.documentElement.appendChild(el);
+          }
+          el.textContent = JSON.stringify(result);
+        }).catch(err => {
+          let el = document.getElementById(resultId);
+          if (!el) {
+            el = document.createElement("div");
+            el.id = resultId;
+            el.style.display = "none";
+            document.documentElement.appendChild(el);
+          }
+          el.textContent = JSON.stringify({ error: err.message || String(err), done: true });
+        });
+      },
+      args: [prmStr, SGE_API_BASE, RESULT_ELEMENT_ID]
     });
-    injectionResult = execRes?.result;
-  } catch (err) {
-    throw new Error(`Impossible d'interroger SGE depuis l'onglet ouvert : ${err.message}`);
+  } catch (scriptErr) {
+    throw new Error(`Injection dans l'onglet SGE échouée : ${scriptErr.message}`);
   }
 
-  if (!injectionResult) {
-    throw new Error("Aucune donnée retournée par l'onglet SGE");
+  // 4. Attendre le résultat dans le DOM de l'onglet SGE (polling max 10s)
+  let rawResult = null;
+  const maxWaitMs = 10000;
+  const pollIntervalMs = 250;
+  const startPoll = Date.now();
+
+  while (Date.now() - startPoll < maxWaitMs) {
+    try {
+      const [readRes] = await chrome.scripting.executeScript({
+        target: { tabId: sgeTab.id },
+        func: (resultId) => {
+          const el = document.getElementById(resultId);
+          if (!el || !el.textContent) return null;
+          try { return JSON.parse(el.textContent); } catch (_) { return null; }
+        },
+        args: [RESULT_ELEMENT_ID]
+      });
+      if (readRes?.result?.done) {
+        rawResult = readRes.result;
+        break;
+      }
+    } catch (_) {
+      break;
+    }
+    await new Promise(r => setTimeout(r, pollIntervalMs));
   }
 
-  // 4. Formater et mettre en cache
+  // Nettoyage de l'élément temporaire dans le DOM (best effort)
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: sgeTab.id },
+      func: (resultId) => { const el = document.getElementById(resultId); if (el) el.remove(); },
+      args: [RESULT_ELEMENT_ID]
+    });
+  } catch (_) {}
+
+  if (!rawResult) {
+    throw new Error("Délai dépassé : l'onglet SGE n'a pas répondu. Vérifiez que vous êtes bien connecté à SGE.");
+  }
+
+  if (rawResult.error) {
+    throw new Error(`Erreur SGE : ${rawResult.error}`);
+  }
+
+  // Si les 3 endpoints ont échoué avec une erreur HTTP (ex: 401, 403)
+  const errors = [];
+  if (rawResult.alimentation?.error) errors.push(`Alimentation: ${rawResult.alimentation.error}`);
+  if (rawResult.comptage?.error) errors.push(`Comptage: ${rawResult.comptage.error}`);
+  if (rawResult.contractuel?.error) errors.push(`Contractuel: ${rawResult.contractuel.error}`);
+
+  if (errors.length === 3) {
+    throw new Error(`Accès aux données SGE refusé (${errors[0]}). Vérifiez votre session SGE sur l'onglet.`);
+  }
+
+  // 5. Formater et mettre en cache
   const formatted = formatSgeData(
-    injectionResult.alimentation,
-    injectionResult.comptage,
-    injectionResult.contractuel,
+    rawResult.alimentation,
+    rawResult.comptage,
+    rawResult.contractuel,
     prmStr
   );
 
   if (formatted.hasData) {
     try {
       const cacheKey = `sge_cache_${prmStr}`;
-      await chrome.storage.local.set({ [cacheKey]: { data: formatted, cachedAt: Date.now() } });
+      await chrome.storage.local.set({
+        [cacheKey]: {
+          prm: prmStr,
+          data: formatted,
+          cachedAt: Date.now()
+        }
+      });
+      console.log(`[Background] ✅ Données SGE mises en cache pour PRM ${prmStr}`);
     } catch (_) {}
   }
 

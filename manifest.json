@@ -19,7 +19,8 @@
   "host_permissions": [
     "https://support.oefr-kraken.energy/*",
     "https://octopusenergy.fr/*",
-    "https://sge.enedis.fr/*"
+    "https://sge.enedis.fr/*",
+    "https://mfa.microapps.enedis.fr/*"
   ],
   "declarative_net_request": {
     "rule_resources": [
