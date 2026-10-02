@@ -319,9 +319,9 @@ fragment IntervalMeasurement on IntervalMeasurementType {
    - **Décembre 2025 :** calculé dynamiquement au prorata des jours de contrat (ex: 70,53 € pour `A-A41F9A92`, 151,64 € pour `A-9A249124`)
 3. **Périmètre et isolation multi-logements (`propertyId` & PRM) :**
    Chaque logement possède son propre identifiant unique `propertyId` et son PRM (`marketSupplyPointId`).
-   - L'extension extrait tous les identifiants de logements visibles dans le DOM actif (Kraken / Espace Client) et explore les pages Next.js en tâche de fond.
-   - Pour chaque contrat, l'extension teste dynamiquement les identifiants candidats avec `GetPropertyMeasurements` : dès qu'une série de mesures valide le PRM, l'identifiant est verrouillé et mis en cache local (`chrome.storage.local`).
-   - Cela garantit que chaque logement interroge ses propres relèves officielles sans jamais tomber sur d'anciens relevés incomplets.
+   - **Isolation stricte des conteneurs DOM sur Kraken :** L'extraction DOM parcourt les liaisons d'accord (`agreements/`) et les PRMs feuilles en s'arrêtant strictement dès qu'un conteneur ne contient qu'un seul identifiant de propriété (`pIdsInParent.length === 1`), empêchant toute contamination croisée vers le conteneur partagé parent.
+   - **Principe d'élimination contextuel global :** Lorsque `resolvePropertyIdsForContracts` traite un logement d'un compte multi-logements, il analyse l'intégralité des contrats du compte. Si un premier logement est verrouillé sur un identifiant $P_1$, le second logement se voit automatiquement attribuer l'identifiant restant $P_2$ par élimination directe ou validation dynamique par `GetPropertyMeasurements`.
+   - **Auto-récupération de session et enrichissement réactif :** Si une erreur d'authentification ou un identifiant non encore résolu se présente, `fetchMonthlyConsumptionData` déclenche automatiquement `performBackgroundSync` pour réactiver la session First-Party, puis `chrome.storage.onChanged` répercute instantanément les nouvelles données dans le popup sans nécessiter de rechargement.
 
 ### C. Algorithme d'Agrégation Mensuelle, Totaux et Moyennes
 
@@ -571,6 +571,35 @@ Dès que le conseiller clique sur l'icône de l'extension pour ouvrir la synthè
    - **État vierge sécurisant :** Si aucune affaire n'est active sur le PRM, un message explicite `✅ Aucune affaire Enedis en cours sur ce PRM` confirme au conseiller qu'aucun blocage distributeur n'est en suspens.
    - **Accordéon d'historique :** Les affaires clôturées ou passées sont regroupées dans un panneau repliable `<details>` pour ne pas surcharger l'affichage principal.
    - **Export 1 clic dans le récapitulatif complet :** Le bouton de copie générale intègre automatiquement une section dédiée `📋 AFFAIRES SGE EN COURS` avec l'ensemble des détails formatés pour un partage immédiat.
+
+### E. Résilience et Auto-Récupération du Suivi Conso (`FETCH_CONSO_DATA`)
+
+1. **Auto-Récupération de Session (Masquerade Fallback) :**
+   - Si les requêtes GraphQL de télérelève Linky (`GetPropertyMeasurements` ou `electricityReading`) renvoient une erreur d'authentification `401 Unauthorized` (expiration du jeton NextAuth `__Secure-next-auth.session-token`), le service worker déclenche automatiquement une synchronisation masquerade transparente en arrière-plan (`performBackgroundSync`) via l'onglet Kraken actif.
+   - Les cookies de session sont rafraîchis en tâche de fond et la requête de mesure est automatiquement ré-exécutée sans aucune intervention du conseiller.
+
+2. **Préservation du Cache & Fusion Intelligente :**
+   - Lors de la réouverture du popup ou de la revalidation silencieuse en arrière-plan (`triggerSilentBackgroundRevalidation`), les données de consommation déjà chargées sont fusionnées et préservées avec les nouveaux contrats pour éviter tout clignotement ou effacement involontaire de l'affichage.
+
+3. **Bouton d'Actualisation Dédié & États Déterministes :**
+   - Un bouton d'actualisation rapide (`#syncConsoBtn`) est intégré dans l'en-tête de la carte de consommation pour forcer à tout moment une resynchronisation directe (`forceSync: true`).
+   - L'indicateur visuel passe immédiatement à `Linky Actif` dès réception des relevés, ou à `Non synchronisé` avec message d'information explicite en cas d'absence de télérelève Enedis, garantissant que l'état ne reste jamais bloqué sur « Chargement... ».
+
+### F. Résolution Bijective et Multi-Logements Déterministe (`CACHE_VERSION = 10`)
+
+1. **Le Piège du Mono-Logement par Défaut :**
+   - Dans les comptes multi-logements (ex: compte client comportant 2 logements distincts avec 2 PRMs), l'extension pouvait initialement n'extraire qu'un seul `propertyId` depuis le DOM Kraken (le second étant chargé via un composant HTMX ou différé).
+   - L'algorithme appliquait un raccourci associant ce seul identifiant à tous les contrats du compte. Or, l'API GraphQL d'Octopus Energy filtre strictement les mesures par `marketSupplyPointId` au sein de la propriété : interroger le mauvais `propertyId` renvoie systématiquement zéro mesure (`edges: []`), bloquant le second logement sur le statut « Non synchronisé ».
+
+2. **Découverte Multi-Source Élargie (Kraken HTMX & Next.js App Router) :**
+   - **Sélecteurs DOM étendus :** Prise en compte de l'ensemble des attributs HTMX (`[hx-get*="properties/"]`, `[hx-get*="premises/"]`, `[data-premise-id]`, etc.) et analyse regex intégrale du HTML (`document.documentElement.innerHTML`).
+   - **Extraction Next.js App Router :** Analyse des scripts de vol Next.js (`self.__next_f.push`) sur `octopusenergy.fr` pour capturer les `propertyId` et liens `/logements/` non présents dans les balises statiques.
+   - **Inventaire officiel GraphQL :** Intégration de `fetchAccountPropertiesFromGraphQL(accountNumber)` interrogeant `account(accountNumber: $accountNumber) { properties { id electricitySupplyPoints { marketSupplyPointId } } }` pour obtenir la cartographie exhaustive directe des logements du compte.
+
+3. **Résolution Bijective et Isolation Totale :**
+   - **Anti-collision stricte :** Deux contrats électricité avec des PRMs différents ne peuvent en aucun cas partager le même `propertyId`. Tout cache partagé en collision est automatiquement invalidé et réinitialisé.
+   - **Règle bijective déterministe (2 contrats / 2 logements) :** Dès lors qu'un compte possède 2 contrats et 2 identifiants candidats, la résolution d'un contrat vers le logement $P_1$ attribue immédiatement par bijection et élimination le logement $P_2$ au second contrat.
+   - **Validation dynamique par mesure :** Chaque identifiant candidat est testé dynamiquement contre `fetchMeasurementsByProperty`. Le candidat validé avec succès est immédiatement verrouillé en cache local (`prop_id_${prm}`) et les données de consommation mensuelles sont affichées de manière totalement indépendante pour chaque logement sélectionné.
 
 
 

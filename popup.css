@@ -533,6 +533,42 @@ body {
   white-space: nowrap;
 }
 
+.conso-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.conso-sync-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  line-height: 1;
+}
+
+.conso-sync-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-main);
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: scale(1.05);
+}
+
+.conso-sync-btn:active {
+  transform: scale(0.95);
+}
+
+.conso-sync-btn.spinning svg {
+  animation: spin 0.8s linear infinite;
+  color: var(--octopus-pink);
+}
+
 .conso-content-body {
   display: flex;
   flex-direction: column;

@@ -49,8 +49,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Récupération dédiée du suivi de consommation mensuel
   if (message.type === "FETCH_CONSO_DATA") {
-    const { accountNumber, prmId, propertyId, contract, propertyIds, propertyMapping } = message.payload || {};
-    fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, contract, propertyMapping, propertyIds)
+    const { accountNumber, prmId, propertyId, contract, propertyIds, propertyMapping, tabId, forceSync } = message.payload || {};
+    fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, contract, propertyMapping, propertyIds, tabId, forceSync)
       .then(async (data) => {
         if (accountNumber && data && data.hasData) {
           try {
@@ -59,7 +59,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               const matched = cachedContracts.find(c => String(c.prm) === String(prmId) || String(c.id) === String(contract?.id));
               if (matched) {
                 matched.consoMensuelle = data;
-                await saveAccountToCache(accountNumber, cachedContracts);
+                if (data.propertyId && !matched.propertyId) {
+                  matched.propertyId = data.propertyId;
+                }
+                await saveAccountToCache(accountNumber, cachedContracts, propertyMapping, propertyIds);
               }
             }
           } catch (_) {}
@@ -131,7 +134,7 @@ const ACCOUNT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes de validité
 const preloadCooldowns = new Map(); // accountNumber -> timestamp du dernier préchargement
 const activePreloadLocks = new Set(); // accountNumber en cours de préchargement
 
-const CACHE_VERSION = 8; // Incrémenté pour inclure l'affichage des plages horaires des Heures Creuses
+const CACHE_VERSION = 11; // v11 : Mutex performBackgroundSync + séquentiel enrichContractsWithConso + guard fetchConso
 
 /**
  * Récupère les données en cache local pour un compte si elles sont encore valides
@@ -159,14 +162,21 @@ async function getCachedAccount(accountNumber) {
  * Enregistre les contrats et le suivi conso d'un compte dans le cache local
  * avec rotation LRU (conserve les 10 derniers comptes max)
  */
-async function saveAccountToCache(accountNumber, contracts) {
+async function saveAccountToCache(accountNumber, contracts, propertyMapping = [], propertyIds = []) {
   if (!accountNumber || !contracts || contracts.length === 0) return;
   try {
     const key = `account_cache_${accountNumber}`;
+    const stored = await chrome.storage.local.get([key]);
+    const existing = stored[key] || {};
+    const mergedMapping = (propertyMapping && propertyMapping.length > 0) ? propertyMapping : (existing.propertyMapping || []);
+    const mergedPropIds = (propertyIds && propertyIds.length > 0) ? propertyIds : (existing.propertyIds || []);
+
     await chrome.storage.local.set({
       [key]: {
         accountNumber,
         contracts,
+        propertyMapping: mergedMapping,
+        propertyIds: mergedPropIds,
         cachedAt: Date.now(),
         cacheVersion: CACHE_VERSION
       }
@@ -174,8 +184,8 @@ async function saveAccountToCache(accountNumber, contracts) {
 
     // Rotation d'index pour ne pas surcharger le storage local
     const indexKey = "account_cache_index";
-    const stored = await chrome.storage.local.get([indexKey]);
-    let index = Array.isArray(stored[indexKey]) ? stored[indexKey] : [];
+    const storedIndex = await chrome.storage.local.get([indexKey]);
+    let index = Array.isArray(storedIndex[indexKey]) ? storedIndex[indexKey] : [];
     index = [accountNumber, ...index.filter(acc => acc !== accountNumber)];
     if (index.length > 10) {
       const toRemove = index.slice(10).map(acc => `account_cache_${acc}`);
@@ -213,35 +223,260 @@ async function extractTabContextForPreload(tabId, isKraken) {
           const agreementIds = [...new Set(
             agreementLinks.map((a) => a.getAttribute("href")?.match(/agreements\/(\d+)/)?.[1]).filter(Boolean)
           )];
-          const propLinks = [...document.querySelectorAll('a[href*="properties/"], a[href*="property/"], [data-property-id]')];
-          const propertyIds = [...new Set(
-            propLinks.map(a => a.getAttribute("data-property-id") || a.getAttribute("href")?.match(/propert(?:y|ies)\/(\d+)/)?.[1]).filter(Boolean)
-          )];
+
+          // Extraction exhaustive de tous les identifiants de propriété / logements sur Kraken
+          const propSelectors = [
+            'a[href*="properties/"]', 'a[href*="property/"]', 'a[href*="premises/"]', 'a[href*="premise/"]', 'a[href*="occupancies/"]', 'a[href*="logements/"]',
+            '[data-property-id]', '[data-premise-id]', '[data-property]', '[data-premise]', '[data-logement-id]',
+            '[hx-get*="properties/"]', '[hx-get*="premises/"]', '[hx-get*="occupancies/"]', '[hx-get*="logements/"]',
+            '[hx-post*="properties/"]', '[hx-post*="premises/"]'
+          ].join(", ");
+
+          const propElements = [...document.querySelectorAll(propSelectors)];
+
+          const getElementPropId = (el) => {
+            if (!el) return null;
+            const directAttr = el.getAttribute("data-property-id") || el.getAttribute("data-premise-id") || el.getAttribute("data-property") || el.getAttribute("data-premise") || el.getAttribute("data-logement-id");
+            if (directAttr && /^\d{5,8}$/.test(directAttr.trim())) return directAttr.trim();
+            const urlStr = el.getAttribute("href") || el.getAttribute("hx-get") || el.getAttribute("hx-post") || "";
+            const urlMatch = urlStr.match(/(?:properties|property|premises|premise|occupancies|occupancy|logements|logement)\/(\d{5,8})/i) ||
+                             urlStr.match(/[?&](?:property_id|propertyId|premise_id|premiseId)=(\d{5,8})/i);
+            return urlMatch ? urlMatch[1] : null;
+          };
+
+          const discoveredPropIds = new Set(propElements.map(getElementPropId).filter(Boolean));
+
+          // Scanner l'intégralité du DOM / HTML Kraken pour capturer tout identifiant
+          try {
+            const htmlStr = document.documentElement.innerHTML || "";
+            const htmlMatches = [...htmlStr.matchAll(/(?:properties|property|premises|premise|occupancies|occupancy|logements|logement)\/(\d{5,8})/gi)];
+            for (const hm of htmlMatches) discoveredPropIds.add(hm[1]);
+            const urlParamMatches = [...htmlStr.matchAll(/[?&](?:property_id|propertyId|premise_id|premiseId)=(\d{5,8})/gi)];
+            for (const um of urlParamMatches) discoveredPropIds.add(um[1]);
+            const textMatches = [...(document.body.innerText || "").matchAll(/(?:Property|Logement|Propriété|Premise)\s*(?:#|n°|ID)?\s*[:]?\s*(\d{5,8})/gi)];
+            for (const tm of textMatches) discoveredPropIds.add(tm[1]);
+          } catch (_) {}
+
+          const propertyIds = [...discoveredPropIds];
+
+          const getPropIdsInEl = (el) => {
+            if (!el) return [];
+            const direct = getElementPropId(el);
+            const subs = [...el.querySelectorAll(propSelectors)].map(getElementPropId).filter(Boolean);
+            return [...new Set(direct ? [direct, ...subs] : subs)];
+          };
+
+          // Extraction sûre des PRMs (14 chiffres) sans altérer les espaces globaux
+          const extractPrmsFromStr = (str) => {
+            if (!str) return [];
+            const prms = new Set();
+            const clean = (str || "").replace(/[\u2068\u2069\u200E\u200F\u202A-\u202E]/g, "");
+            const m1 = clean.match(/(?:\b|\D)(\d{14})(?:\b|\D)/g);
+            if (m1) {
+              for (const item of m1) {
+                const digits = item.replace(/\D/g, "");
+                if (digits.length === 14) prms.add(digits);
+              }
+            }
+            const m2 = clean.match(/(?:\b|\D)(\d{2,4}(?:[\s\-\.]+\d{2,4}){3,6})(?:\b|\D)/g);
+            if (m2) {
+              for (const item of m2) {
+                const digits = item.replace(/\D/g, "");
+                if (digits.length === 14) prms.add(digits);
+              }
+            }
+            return [...prms];
+          };
+
           const propertyMapping = [];
-          for (const pl of propLinks) {
-            const pId = pl.getAttribute("data-property-id") || pl.getAttribute("href")?.match(/propert(?:y|ies)\/(\d+)/)?.[1];
+          const mappedAgreements = new Set();
+          const mappedPrms = new Set();
+
+          // 1. Détection des conteneurs dédiés pour chaque propriété isolée
+          for (const pl of propElements) {
+            const pId = getElementPropId(pl);
             if (!pId) continue;
+            let currentDedicated = pl.parentElement;
             let parent = pl.parentElement;
-            for (let i = 0; i < 8 && parent && parent !== document.body; i++) {
-              const agLink = parent.querySelector('a[href*="agreements/"]');
-              const agId = agLink?.getAttribute("href")?.match(/agreements\/(\d+)/)?.[1];
-              const prmMatch = parent.innerText.match(/\b\d{14}\b/);
-              if (agId || prmMatch) {
-                propertyMapping.push({ propertyId: pId, agreementId: agId || null, prm: prmMatch ? prmMatch[0] : null });
+            for (let depth = 0; depth < 10 && parent && parent !== document.body; depth++) {
+              const pIds = getPropIdsInEl(parent);
+              if (pIds.length === 1 && pIds[0] === pId) {
+                currentDedicated = parent;
+              } else if (pIds.length > 1) {
+                break;
+              }
+              parent = parent.parentElement;
+            }
+            if (currentDedicated) {
+              const agLinksInContainer = [...currentDedicated.querySelectorAll('a[href*="agreements/"]')];
+              for (const ag of agLinksInContainer) {
+                const agId = ag.getAttribute("href")?.match(/agreements\/(\d+)/)?.[1];
+                if (agId && !mappedAgreements.has(agId)) {
+                  propertyMapping.push({ propertyId: String(pId), agreementId: agId, prm: null });
+                  mappedAgreements.add(agId);
+                }
+              }
+              const prmsFound = extractPrmsFromStr(currentDedicated.innerText);
+              for (const prm of prmsFound) {
+                if (!mappedPrms.has(prm)) {
+                  propertyMapping.push({ propertyId: String(pId), agreementId: null, prm: prm });
+                  mappedPrms.add(prm);
+                }
+              }
+            }
+          }
+
+          // 2. Extraction des accords restants en remontant vers leur conteneur dédié
+          for (const agEl of agreementLinks) {
+            const agId = agEl.getAttribute("href")?.match(/agreements\/(\d+)/)?.[1];
+            if (!agId || mappedAgreements.has(agId)) continue;
+            let parent = agEl.parentElement;
+            for (let depth = 0; depth < 10 && parent && parent !== document.body; depth++) {
+              const pIds = getPropIdsInEl(parent);
+              if (pIds.length === 1) {
+                const pId = pIds[0];
+                const prms = extractPrmsFromStr(parent.innerText);
+                const prm = prms[0] || null;
+                const ledgerMatch = parent.innerText.match(/\b(L-[A-Z0-9]{8,})\b/);
+                propertyMapping.push({ propertyId: pId, agreementId: agId, prm, ledgerId: ledgerMatch ? ledgerMatch[1] : null });
+                mappedAgreements.add(agId);
+                if (prm) mappedPrms.add(prm);
+                break;
+              } else if (pIds.length > 1) {
                 break;
               }
               parent = parent.parentElement;
             }
           }
+
+          // 3. Extraction depuis chaque PRM feuille non mappé
+          const leafEls = [...document.querySelectorAll("*")].filter(el => el.children.length === 0 && /\d{14}/.test((el.textContent || "").replace(/\s/g, "")));
+          for (const leaf of leafEls) {
+            const prms = extractPrmsFromStr(leaf.textContent);
+            if (prms.length === 0) continue;
+            const prm = prms[0];
+            if (mappedPrms.has(prm)) continue;
+            let parent = leaf.parentElement;
+            for (let depth = 0; depth < 10 && parent && parent !== document.body; depth++) {
+              const pIds = getPropIdsInEl(parent);
+              if (pIds.length === 1) {
+                const pId = pIds[0];
+                const agLink = parent.querySelector('a[href*="agreements/"]');
+                const agId = agLink?.getAttribute("href")?.match(/agreements\/(\d+)/)?.[1];
+                const ledgerMatch = parent.innerText.match(/\b(L-[A-Z0-9]{8,})\b/);
+                propertyMapping.push({ propertyId: pId, agreementId: agId || null, prm, ledgerId: ledgerMatch ? ledgerMatch[1] : null });
+                mappedPrms.add(prm);
+                if (agId) mappedAgreements.add(agId);
+                break;
+              } else if (pIds.length > 1) {
+                break;
+              }
+              parent = parent.parentElement;
+            }
+          }
+
+          // 4. Si 1 seul propertyId au total ET 1 seul accord/PRM (mono-logement strict)
+          const distinctPrmsFound = [...new Set(propertyMapping.map(m => m.prm).filter(Boolean))];
+          if (propertyIds.length === 1 && agreementIds.length <= 1 && distinctPrmsFound.length <= 1) {
+            for (const m of propertyMapping) {
+              if (!m.propertyId) m.propertyId = propertyIds[0];
+            }
+          }
+
+          // 5. Règle bijective pour 2 contrats / 2 logements
+          if (agreementIds.length === 2 && propertyIds.length === 2) {
+            const mapped0 = propertyMapping.find(m => m.agreementId === agreementIds[0] || (m.prm && m.propertyId));
+            const mapped1 = propertyMapping.find(m => m.agreementId === agreementIds[1]);
+            if (mapped0?.propertyId && (!mapped1 || !mapped1.propertyId)) {
+              const remainingPid = propertyIds.find(pid => pid !== mapped0.propertyId);
+              if (remainingPid) {
+                propertyMapping.push({ propertyId: remainingPid, agreementId: agreementIds[1], prm: null });
+              }
+            } else if (mapped1?.propertyId && (!mapped0 || !mapped0.propertyId)) {
+              const remainingPid = propertyIds.find(pid => pid !== mapped1.propertyId);
+              if (remainingPid) {
+                propertyMapping.push({ propertyId: remainingPid, agreementId: agreementIds[0], prm: null });
+              }
+            }
+          }
+
           return { agreementIds, agreementId: agreementIds[0] || null, propertyIds, propertyMapping };
         } else {
+          // Onglet Espace Client octopusenergy.fr
           const contractLinks = [...document.querySelectorAll('a[href*="contrats/"]')];
           const agreementIds = [...new Set(contractLinks.map(a => a.getAttribute("href")?.match(/contrats\/(\d+)/)?.[1]).filter(Boolean))];
           const logementLinks = [...document.querySelectorAll('a[href*="logements/"]')];
           const propertyIds = [...new Set(logementLinks.map(a => a.getAttribute("href")?.match(/logements\/(\d+)/)?.[1]).filter(Boolean))];
           const urlPropMatch = window.location.pathname.match(/logements\/(\d+)/);
           if (urlPropMatch && !propertyIds.includes(urlPropMatch[1])) propertyIds.push(urlPropMatch[1]);
-          return { agreementIds, agreementId: agreementIds[0] || null, propertyIds, propertyMapping: [] };
+
+          // Scanner tous les liens /logements/ dans le HTML complet
+          try {
+            const htmlStr = document.documentElement.innerHTML || "";
+            const htmlLogements = [...htmlStr.matchAll(/\/logements\/(\d+)/g)].map(m => m[1]);
+            for (const hl of htmlLogements) {
+              if (!propertyIds.includes(hl)) propertyIds.push(hl);
+            }
+          } catch (_) {}
+
+          const propertyMapping = [];
+
+          // Scanner les scripts Next.js App Router (self.__next_f)
+          try {
+            const scriptTags = [...document.querySelectorAll("script")];
+            for (const sc of scriptTags) {
+              const text = sc.textContent || "";
+              if (text.includes("self.__next_f") || text.includes("__NEXT_DATA__") || text.includes("PropertyType") || text.includes("logements/")) {
+                const pMatches = [...text.matchAll(/\/logements\/(\d+)/g)].map(m => m[1]);
+                for (const pm of pMatches) {
+                  if (!propertyIds.includes(pm)) propertyIds.push(pm);
+                }
+                const propIdMatches = [...text.matchAll(/"propertyId"\s*:\s*"?(\d{5,8})"?/g)].map(m => m[1]);
+                for (const pim of propIdMatches) {
+                  if (!propertyIds.includes(pim)) propertyIds.push(pim);
+                }
+              }
+            }
+          } catch (_) {}
+
+          const nextDataEl = document.getElementById("__NEXT_DATA__");
+          if (nextDataEl && nextDataEl.textContent) {
+            try {
+              const nextData = JSON.parse(nextDataEl.textContent);
+              const walk = (node, depth = 0) => {
+                if (!node || depth > 8) return;
+                if (Array.isArray(node)) {
+                  for (const it of node) walk(it, depth + 1);
+                  return;
+                }
+                if (typeof node === "object") {
+                  if (node.id && (node.electricitySupplyPoints || node.supplyPoints || node.gasSupplyPoints || node.address || node.__typename === "PropertyType")) {
+                    const pId = String(node.id);
+                    if (!propertyIds.includes(pId)) propertyIds.push(pId);
+                    const sps = [...(node.electricitySupplyPoints || []), ...(node.supplyPoints || []), ...(node.gasSupplyPoints || [])];
+                    for (const sp of sps) {
+                      const prmVal = sp.marketSupplyPointId || sp.externalIdentifier || sp.prm || sp.id || sp.meterPoint?.id;
+                      const ags = sp.agreements || [];
+                      for (const ag of ags) {
+                        const agId = ag.id ? String(ag.id) : null;
+                        if (agId && !agreementIds.includes(agId)) agreementIds.push(agId);
+                        propertyMapping.push({ propertyId: pId, agreementId: agId, prm: prmVal ? String(prmVal) : null });
+                      }
+                      if (prmVal) {
+                        propertyMapping.push({ propertyId: pId, agreementId: null, prm: String(prmVal) });
+                      }
+                    }
+                  }
+                  for (const k of Object.keys(node)) {
+                    walk(node[k], depth + 1);
+                  }
+                }
+              };
+              walk(nextData);
+            } catch (_) {}
+          }
+
+          return { agreementIds, agreementId: agreementIds[0] || null, propertyIds, propertyMapping };
         }
       },
       args: [isKraken]
@@ -368,12 +603,12 @@ async function handleFetchContractData(payload) {
   const result = await executeAgreementsQuery(accountNumber, idsToQuery);
   if (result.contracts && result.contracts.length > 0) {
     // RESTITUTION INSTANTANÉE : sauvegarder et retourner les contrats immédiatement (~200ms)
-    await saveAccountToCache(accountNumber, result.contracts);
+    await saveAccountToCache(accountNumber, result.contracts, propertyMapping, propertyIds);
 
     // Lancement de l'enrichissement conso en tâche de fond (sans bloquer l'affichage de l'interface)
     enrichContractsWithConso(result.contracts, accountNumber, propertyMapping, propertyIds)
       .then(async (enriched) => {
-        await saveAccountToCache(accountNumber, enriched);
+        await saveAccountToCache(accountNumber, enriched, propertyMapping, propertyIds);
       })
       .catch((e) => console.warn("[Background] Erreur conso arrière-plan :", e.message));
 
@@ -387,11 +622,11 @@ async function handleFetchContractData(payload) {
     try {
       const syncedContracts = await performBackgroundSync(tabId, accountNumber, idsToQuery, propertyMapping, propertyIds);
       if (syncedContracts && syncedContracts.length > 0) {
-        await saveAccountToCache(accountNumber, syncedContracts);
+        await saveAccountToCache(accountNumber, syncedContracts, propertyMapping, propertyIds);
 
         enrichContractsWithConso(syncedContracts, accountNumber, propertyMapping, propertyIds)
           .then(async (enriched) => {
-            await saveAccountToCache(accountNumber, enriched);
+            await saveAccountToCache(accountNumber, enriched, propertyMapping, propertyIds);
           })
           .catch((e) => console.warn("[Background] Erreur conso arrière-plan :", e.message));
 
@@ -413,17 +648,54 @@ async function handleFetchContractData(payload) {
   throw err;
 }
 
+// Mutex pour empêcher plusieurs performBackgroundSync simultanés (prévention des onglets multiples)
+const _bgSyncLocks = new Map();
+
 /**
  * Effectue la synchronisation masquerade en tâche de fond dans le service worker,
  * en créant un onglet inactif (active: false) pour ne PAS voler le focus ni fermer le popup,
  * et en garantissant la fermeture de cet onglet quoi qu'il arrive (dans le bloc finally).
+ *
+ * Protégée par un mutex par compte : si un sync est déjà en cours pour le même compte,
+ * les appels concurrents attendent la fin du premier au lieu de créer de nouveaux onglets.
  */
 async function performBackgroundSync(tabId, accountNumber, idsToQuery, propertyMapping = [], propertyIds = []) {
+  // Vérifier si un sync est déjà en cours pour ce compte
+  const lockKey = accountNumber || "__default__";
+  if (_bgSyncLocks.has(lockKey)) {
+    console.log(`[Background] ⏳ Sync déjà en cours pour ${lockKey}, attente de la fin...`);
+    try {
+      await _bgSyncLocks.get(lockKey);
+    } catch (_) {}
+    // Après l'attente, retourner true (la session a été synchronisée par l'appel précédent)
+    return true;
+  }
+
+  // Créer le verrou
+  let releaseLock;
+  const lockPromise = new Promise((resolve) => { releaseLock = resolve; });
+  _bgSyncLocks.set(lockKey, lockPromise);
+
   let createdTabId = null;
   try {
+    // 0. S'assurer que la commande masquerade s'exécute bien sur un onglet Kraken support
+    let krakenTabId = tabId;
+    try {
+      const currentTab = krakenTabId ? await chrome.tabs.get(krakenTabId).catch(() => null) : null;
+      if (!currentTab || !currentTab.url || !currentTab.url.includes("support.oefr-kraken.energy")) {
+        const allKraken = await chrome.tabs.query({ url: "https://support.oefr-kraken.energy/*" });
+        const matching = allKraken.find(t => t.url && t.url.includes(accountNumber)) || allKraken[0];
+        if (matching) krakenTabId = matching.id;
+      }
+    } catch (_) {}
+
+    if (!krakenTabId) {
+      throw new Error("Onglet Kraken support introuvable pour synchroniser la session");
+    }
+
     // 1. Récupérer l'action masquerade et le token CSRF depuis l'onglet Kraken actuel sans ouvrir d'onglet
     const [execRes] = await chrome.scripting.executeScript({
-      target: { tabId: tabId },
+      target: { tabId: krakenTabId },
       args: [accountNumber],
       func: async (acctNum) => {
         const findExistingForm = () => {
@@ -567,25 +839,150 @@ async function performBackgroundSync(tabId, accountNumber, idsToQuery, propertyM
     try {
       const [domRes] = await chrome.scripting.executeScript({
         target: { tabId: createdTabId },
-        func: () => {
-          const links = [...document.body.innerHTML.matchAll(/\/logements\/(\d+)/g)].map(m => m[1]);
-          return [...new Set(links)];
+        func: async () => {
+          const foundIds = new Set();
+          const mapping = [];
+
+          // 1. Scanner tous les liens /logements/ dans le HTML complet
+          try {
+            const htmlStr = document.documentElement.innerHTML || "";
+            const links = [...htmlStr.matchAll(/\/logements\/(\d+)/g)].map(m => m[1]);
+            for (const l of links) foundIds.add(String(l));
+          } catch (_) {}
+
+          // 2. Scanner les scripts Next.js App Router (self.__next_f)
+          try {
+            const scriptTags = [...document.querySelectorAll("script")];
+            for (const sc of scriptTags) {
+              const text = sc.textContent || "";
+              if (text.includes("self.__next_f") || text.includes("__NEXT_DATA__") || text.includes("PropertyType") || text.includes("logements/")) {
+                const lms = [...text.matchAll(/\/logements\/(\d+)/g)].map(m => m[1]);
+                for (const m of lms) foundIds.add(String(m));
+                const pids = [...text.matchAll(/"propertyId"\s*:\s*"?(\d{5,8})"?/g)].map(m => m[1]);
+                for (const m of pids) foundIds.add(String(m));
+              }
+            }
+          } catch (_) {}
+
+          // 3. Exécuter une requête GraphQL first-party directement dans l'onglet authentifié
+          try {
+            const gqlRes = await fetch("/api/graphql/kraken", {
+              method: "POST",
+              headers: {
+                "Accept": "application/graphql-response+json, application/json",
+                "Content-Type": "application/json"
+              },
+              credentials: "include",
+              body: JSON.stringify({
+                query: `
+                  query GetAccountPropsDirect {
+                    viewer {
+                      accounts {
+                        number
+                        properties {
+                          id
+                          electricitySupplyPoints {
+                            id
+                            marketSupplyPointId
+                            agreements { id }
+                          }
+                          gasSupplyPoints {
+                            id
+                            marketSupplyPointId
+                            agreements { id }
+                          }
+                        }
+                      }
+                    }
+                  }
+                `,
+                operationName: "GetAccountPropsDirect"
+              })
+            });
+            if (gqlRes.ok) {
+              const gqlJson = await gqlRes.json();
+              const accs = gqlJson?.data?.viewer?.accounts || [];
+              for (const acc of accs) {
+                for (const prop of (acc.properties || [])) {
+                  if (prop.id) {
+                    const pid = String(prop.id);
+                    foundIds.add(pid);
+                    const sps = [...(prop.electricitySupplyPoints || []), ...(prop.gasSupplyPoints || [])];
+                    for (const sp of sps) {
+                      const prm = sp.marketSupplyPointId || sp.externalIdentifier;
+                      for (const ag of (sp.agreements || [])) {
+                        mapping.push({ propertyId: pid, agreementId: ag.id ? String(ag.id) : null, prm: prm ? String(prm) : null });
+                      }
+                      if (prm) mapping.push({ propertyId: pid, agreementId: null, prm: String(prm) });
+                    }
+                  }
+                }
+              }
+            }
+          } catch (_) {}
+
+          // 4. Fallback __NEXT_DATA__
+          const nextDataEl = document.getElementById("__NEXT_DATA__");
+          if (nextDataEl && nextDataEl.textContent) {
+            try {
+              const data = JSON.parse(nextDataEl.textContent);
+              const walk = (node, depth = 0) => {
+                if (!node || depth > 8) return;
+                if (Array.isArray(node)) {
+                  for (const it of node) walk(it, depth + 1);
+                  return;
+                }
+                if (typeof node === "object") {
+                  if (node.id && (node.electricitySupplyPoints || node.supplyPoints || node.gasSupplyPoints || node.address || node.__typename === "PropertyType")) {
+                    const pId = String(node.id);
+                    foundIds.add(pId);
+                    const sps = [...(node.electricitySupplyPoints || []), ...(node.supplyPoints || []), ...(node.gasSupplyPoints || [])];
+                    for (const sp of sps) {
+                      const prmVal = sp.marketSupplyPointId || sp.externalIdentifier || sp.prm || sp.id || sp.meterPoint?.id;
+                      const ags = sp.agreements || [];
+                      for (const ag of ags) {
+                        mapping.push({ propertyId: pId, agreementId: ag.id ? String(ag.id) : null, prm: prmVal ? String(prmVal) : null });
+                      }
+                      if (prmVal) {
+                        mapping.push({ propertyId: pId, agreementId: null, prm: String(prmVal) });
+                      }
+                    }
+                  }
+                  for (const k of Object.keys(node)) {
+                    walk(node[k], depth + 1);
+                  }
+                }
+              };
+              walk(data);
+            } catch (_) {}
+          }
+          return { propertyIds: [...foundIds], mapping };
         }
       });
-      if (domRes?.result?.length > 0) {
-        for (const p of domRes.result) {
-          if (!propertyIds.includes(p)) propertyIds.push(p);
+      if (domRes?.result) {
+        if (Array.isArray(domRes.result.propertyIds)) {
+          for (const p of domRes.result.propertyIds) {
+            if (!propertyIds.includes(p)) propertyIds.push(p);
+          }
+        }
+        if (Array.isArray(domRes.result.mapping)) {
+          for (const m of domRes.result.mapping) {
+            propertyMapping.push(m);
+          }
         }
       }
     } catch (_) {}
 
-    // 7. Requête GraphQL avec les cookies maintenant actifs
-    const result = await executeAgreementsQuery(accountNumber, idsToQuery);
-    if (result.contracts && result.contracts.length > 0) {
-      return result.contracts;
+    // 7. Requête GraphQL avec les cookies maintenant actifs (si des contrats étaient demandés)
+    if (idsToQuery && idsToQuery.length > 0 && idsToQuery[0] !== null) {
+      const result = await executeAgreementsQuery(accountNumber, idsToQuery);
+      if (result.contracts && result.contracts.length > 0) {
+        return result.contracts;
+      }
+      throw new Error("Aucun contrat trouvé après synchronisation");
     }
 
-    throw new Error("Aucun contrat trouvé après synchronisation");
+    return true;
   } finally {
     // FERMETURE GARANTIE DE L'ONGLET EN ARRIÈRE-PLAN
     if (createdTabId) {
@@ -594,6 +991,10 @@ async function performBackgroundSync(tabId, accountNumber, idsToQuery, propertyM
         console.log("[Background] Onglet masquerade fermé automatiquement :", createdTabId);
       } catch (_) {}
     }
+    // Libérer le verrou pour permettre de futurs syncs
+    const lockKey = accountNumber || "__default__";
+    _bgSyncLocks.delete(lockKey);
+    if (releaseLock) releaseLock();
   }
 }
 
@@ -1202,6 +1603,12 @@ function generateMonthRanges(count = 12, contract = null) {
 
     ranges.push(bounds);
   }
+
+  // Sécurité : si aucun mois ne correspond aux filtres de dates (ex: contrat venant de démarrer), inclure le mois courant
+  if (ranges.length === 0) {
+    ranges.push(formatMonthBoundaries(now.getFullYear(), now.getMonth()));
+  }
+
   return ranges;
 }
 
@@ -1483,11 +1890,22 @@ async function fetchMeasurementsByProperty(propertyId, prmId, contract = null) {
 
       if (!res.ok) {
         console.warn(`[Background] Erreur HTTP ${res.status} pour mois ${range.yearMonth}`);
+        if (res.status === 401 || res.status === 403) {
+          throw new Error(`AUTH_${res.status}`);
+        }
         return null;
       }
 
       const json = await res.json();
       if (json.errors && json.errors.length > 0) {
+        const isAuth = json.errors.some(e => {
+          const msg = (e.message || "").toLowerCase();
+          const code = (e.extensions?.code || "").toLowerCase();
+          return msg.includes("auth") || msg.includes("login") || msg.includes("logged in") || msg.includes("forbidden") || msg.includes("permission") || code.includes("unauth") || code.includes("forbidden");
+        });
+        if (isAuth) {
+          throw new Error("AUTH_GRAPHQL");
+        }
         console.warn(`[Background] Erreurs GraphQL pour mois ${range.yearMonth} :`, json.errors);
         return null;
       }
@@ -1495,6 +1913,9 @@ async function fetchMeasurementsByProperty(propertyId, prmId, contract = null) {
       const edges = json?.data?.property?.measurements?.edges || [];
       return parsePropertyMeasurementsMonth(edges, range, contract);
     } catch (err) {
+      if (err.message && err.message.startsWith("AUTH_")) {
+        throw err;
+      }
       console.warn(`[Background] Exception mesure mois ${range.yearMonth} :`, err.message);
       return null;
     }
@@ -1565,6 +1986,136 @@ async function fetchMeasurementsByProperty(propertyId, prmId, contract = null) {
 }
 
 /**
+ * Interroge l'API GraphQL d'Octopus Energy pour récupérer directement tous les logements
+ * (properties) rattachés à un compte client et leurs PRMs associés
+ */
+async function fetchAccountPropertiesFromGraphQL(accountNumber) {
+  if (!accountNumber) return { propertyIds: [], propertyMapping: [] };
+
+  const queries = [
+    {
+      name: "GetAccountProperties",
+      query: `
+        query GetAccountProperties($accountNumber: String!) {
+          account(accountNumber: $accountNumber) {
+            id
+            number
+            properties {
+              id
+              address { fullAddress }
+              electricitySupplyPoints {
+                id
+                marketSupplyPointId
+                agreements { id }
+              }
+              gasSupplyPoints {
+                id
+                marketSupplyPointId
+                agreements { id }
+              }
+            }
+          }
+        }
+      `,
+      variables: { accountNumber }
+    },
+    {
+      name: "GetViewerProperties",
+      query: `
+        query GetViewerProperties {
+          viewer {
+            accounts {
+              number
+              properties {
+                id
+                address { fullAddress }
+                electricitySupplyPoints {
+                  id
+                  marketSupplyPointId
+                  agreements { id }
+                }
+                gasSupplyPoints {
+                  id
+                  marketSupplyPointId
+                  agreements { id }
+                }
+              }
+            }
+          }
+        }
+      `,
+      variables: {}
+    }
+  ];
+
+  const foundIds = new Set();
+  const mapping = [];
+
+  for (const q of queries) {
+    try {
+      const res = await fetch("https://octopusenergy.fr/api/graphql/kraken", {
+        method: "POST",
+        headers: {
+          "Accept": "application/graphql-response+json, application/json",
+          "Content-Type": "application/json"
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          query: q.query,
+          variables: q.variables,
+          operationName: q.name
+        })
+      });
+
+      if (!res.ok) continue;
+      const json = await res.json();
+      if (json.errors && json.errors.length > 0) {
+        continue;
+      }
+
+      let props = [];
+      if (json?.data?.account?.properties) {
+        props = json.data.account.properties;
+      } else if (json?.data?.viewer?.accounts) {
+        const acc = json.data.viewer.accounts.find(a => a.number === accountNumber) || json.data.viewer.accounts[0];
+        if (acc?.properties) props = acc.properties;
+      }
+
+      if (Array.isArray(props) && props.length > 0) {
+        for (const p of props) {
+          if (!p?.id) continue;
+          const pid = String(p.id);
+          foundIds.add(pid);
+          const sps = [...(p.electricitySupplyPoints || []), ...(p.gasSupplyPoints || [])];
+          for (const sp of sps) {
+            const prm = sp.marketSupplyPointId || sp.externalIdentifier;
+            const ags = sp.agreements || [];
+            for (const ag of ags) {
+              mapping.push({
+                propertyId: pid,
+                agreementId: ag.id ? String(ag.id) : null,
+                prm: prm ? String(prm) : null
+              });
+            }
+            if (prm) {
+              mapping.push({ propertyId: pid, agreementId: null, prm: String(prm) });
+            }
+          }
+        }
+        if (foundIds.size > 0) {
+          console.log(`[Background] 🎯 Logements découverts via ${q.name} :`, [...foundIds], mapping);
+          return { propertyIds: [...foundIds], propertyMapping: mapping };
+        }
+      }
+    } catch (e) {
+      console.warn(`[Background] Échec ${q.name} :`, e.message);
+    }
+  }
+
+  return { propertyIds: [...foundIds], propertyMapping: mapping };
+}
+
+/**
  * Résout automatiquement le propertyId de chaque contrat en associant les supplyPoints
  * Gère le multi-logement avec extraction DOM, analyse des pages Espace Client et validation dynamique par GetPropertyMeasurements
  */
@@ -1573,20 +2124,33 @@ async function resolvePropertyIdsForContracts(accountNumber, contracts, property
 
   const toCache = {};
 
-  // 1. Appliquer le mapping direct extrait du DOM de Kraken / Espace Client si fourni
+  // 1. Récupérer l'ensemble des contrats du compte depuis le cache si disponible
+  // pour avoir une vue multi-logements globale même si un sous-ensemble a été passé
+  let allContracts = contracts;
+  try {
+    const cached = await getCachedAccount(accountNumber);
+    if (cached && Array.isArray(cached) && cached.length > 0) {
+      const mapById = new Map();
+      for (const c of cached) if (c && c.id) mapById.set(String(c.id), c);
+      for (const c of contracts) if (c && c.id) mapById.set(String(c.id), c);
+      allContracts = [...mapById.values()];
+    }
+  } catch (_) {}
+
+  // 2. Appliquer le mapping direct extrait du DOM de Kraken / Espace Client si fourni
   if (Array.isArray(propertyMapping) && propertyMapping.length > 0) {
     for (const m of propertyMapping) {
       if (!m.propertyId) continue;
       const propId = String(m.propertyId);
       if (m.prm) {
-        const c = contracts.find(c => c.prm === String(m.prm));
+        const c = allContracts.find(c => c.prm === String(m.prm));
         if (c) {
           c.propertyId = propId;
           toCache[`prop_id_${c.prm}`] = propId;
         }
       }
       if (m.agreementId) {
-        const c = contracts.find(c => String(c.id) === String(m.agreementId));
+        const c = allContracts.find(c => String(c.id) === String(m.agreementId));
         if (c) {
           c.propertyId = propId;
           if (c.prm && c.prm !== "-") toCache[`prop_id_${c.prm}`] = propId;
@@ -1595,9 +2159,9 @@ async function resolvePropertyIdsForContracts(accountNumber, contracts, property
     }
   }
 
-  // 2. Recherche dans le cache local
+  // 3. Recherche dans le cache local (prop_id_${prm})
   try {
-    const missing = contracts.filter(c => !c.propertyId && c.prm && c.prm !== "-");
+    const missing = allContracts.filter(c => !c.propertyId && c.prm && c.prm !== "-");
     if (missing.length > 0) {
       const cacheKeys = missing.map(c => `prop_id_${c.prm}`);
       const cached = await chrome.storage.local.get(cacheKeys);
@@ -1609,44 +2173,104 @@ async function resolvePropertyIdsForContracts(accountNumber, contracts, property
     }
   } catch (_) {}
 
-  // 3. Fallback déterministe pour les PRMs connus
-  for (const c of contracts) {
-    if (!c.propertyId && c.prm === "17566859598256") {
-      c.propertyId = "717277";
-      toCache[`prop_id_${c.prm}`] = "717277";
+  // 4. Nettoyage proactif de tout cache local stale 717277 ET des collisions multi-logements
+  try {
+    const seenPids = new Map();
+    for (const c of allContracts) {
+      if (c.propertyId === "717277" && c.prm) {
+        c.propertyId = null;
+        await chrome.storage.local.remove([`prop_id_${c.prm}`]);
+      } else if (c.propertyId && c.prm) {
+        if (seenPids.has(c.propertyId)) {
+          // Deux PRMs distincts ne peuvent pas partager le même propertyId élec
+          const otherPrm = seenPids.get(c.propertyId);
+          console.warn(`[Background] ⚠️ Collision propertyId ${c.propertyId} entre PRM ${c.prm} et ${otherPrm}, réinitialisation`);
+          c.propertyId = null;
+          await chrome.storage.local.remove([`prop_id_${c.prm}`]);
+        } else {
+          seenPids.set(c.propertyId, c.prm);
+        }
+      }
     }
-    if (!c.propertyId && c.prm === "09196092568363") {
-      c.propertyId = "866908";
-      toCache[`prop_id_${c.prm}`] = "866908";
-    }
-  }
+  } catch (_) {}
 
-  // Si tous les contrats ont leur propertyId, on enregistre et termine
-  const stillMissing = contracts.filter(c => !c.propertyId && c.prm && c.prm !== "-");
-  if (stillMissing.length === 0) {
-    if (Object.keys(toCache).length > 0) {
-      await chrome.storage.local.set(toCache);
-    }
-    return contracts;
-  }
-
-  // 4. Collecte de tous les propertyIds candidats (depuis DOM, HTML Espace Client, Next.js)
+  // 5. Collecte de tous les propertyIds candidats (depuis DOM, HTML Espace Client, Next.js)
   const candidatePropIds = new Set();
   if (Array.isArray(propertyIds)) {
     for (const pid of propertyIds) {
       if (pid) candidatePropIds.add(String(pid));
     }
   }
+  for (const m of propertyMapping) {
+    if (m?.propertyId) candidatePropIds.add(String(m.propertyId));
+  }
+  for (const c of allContracts) {
+    if (c.propertyId) candidatePropIds.add(String(c.propertyId));
+  }
 
-  // 5. Exploration des pages Espace Client pour découvrir tous les identifiants de logements
+  // 6. Interrogation directe GraphQL pour récupérer la cartographie officielle des logements si des contrats sont manquants
+  const distinctPrms = [...new Set(allContracts.map(c => c.prm).filter(p => p && p !== "-"))];
+  if (allContracts.some(c => !c.propertyId && c.prm && c.prm !== "-")) {
+    try {
+      const gqlProps = await fetchAccountPropertiesFromGraphQL(accountNumber);
+      if (gqlProps?.propertyIds?.length > 0) {
+        for (const pid of gqlProps.propertyIds) candidatePropIds.add(String(pid));
+        if (Array.isArray(gqlProps.propertyMapping)) {
+          for (const m of gqlProps.propertyMapping) {
+            if (m.propertyId) candidatePropIds.add(String(m.propertyId));
+            if (m.prm) {
+              const cMatch = allContracts.find(c => c.prm === String(m.prm));
+              if (cMatch && !cMatch.propertyId) {
+                cMatch.propertyId = String(m.propertyId);
+                toCache[`prop_id_${cMatch.prm}`] = String(m.propertyId);
+              }
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Règle mono-logement stricte : uniquement si 1 seul PRM élec sur le compte
+  if (candidatePropIds.size === 1 && distinctPrms.length <= 1) {
+    const singlePid = [...candidatePropIds][0];
+    for (const c of allContracts) {
+      if (!c.propertyId) {
+        c.propertyId = singlePid;
+        if (c.prm && c.prm !== "-") toCache[`prop_id_${c.prm}`] = singlePid;
+      }
+    }
+  }
+
+  // Si tous les contrats passés ont déjà leur propertyId résolu, enregistrer et terminer
+  const stillMissingPassed = contracts.filter(c => !c.propertyId && c.prm && c.prm !== "-");
+  if (stillMissingPassed.length === 0) {
+    for (const c of contracts) {
+      if (!c.propertyId) {
+        const found = allContracts.find(a => String(a.id) === String(c.id) || a.prm === c.prm);
+        if (found?.propertyId) c.propertyId = found.propertyId;
+      }
+    }
+    if (Object.keys(toCache).length > 0) {
+      await chrome.storage.local.set(toCache);
+    }
+    return contracts;
+  }
+
+  // 7. Exploration des pages Espace Client pour découvrir tous les identifiants de logements
   try {
-    const knownAssigned = contracts.map(c => c.propertyId).filter(Boolean);
-    const primaryPropId = knownAssigned[0] || "717277";
+    const knownAssigned = allContracts.map(c => c.propertyId).filter(Boolean);
+    const crawlIds = [...new Set([...knownAssigned, ...candidatePropIds])];
     const urlsToCrawl = [
-      `https://octopusenergy.fr/fr/espace-client/comptes/${accountNumber}/logements/${primaryPropId}/suivi-conso`,
+      `https://octopusenergy.fr/espace-client/comptes/${accountNumber}`,
+      `https://octopusenergy.fr/espace-client/comptes/${accountNumber}/logements`,
       `https://octopusenergy.fr/fr/espace-client/comptes/${accountNumber}`,
       `https://octopusenergy.fr/fr/espace-client/comptes/${accountNumber}/logements`
     ];
+    for (const cid of crawlIds) {
+      urlsToCrawl.push(`https://octopusenergy.fr/espace-client/comptes/${accountNumber}/logements/${cid}/suivi-conso`);
+      urlsToCrawl.push(`https://octopusenergy.fr/fr/espace-client/comptes/${accountNumber}/logements/${cid}/suivi-conso`);
+    }
 
     for (const pageUrl of urlsToCrawl) {
       try {
@@ -1660,7 +2284,19 @@ async function resolvePropertyIdsForContracts(accountNumber, contracts, property
           candidatePropIds.add(String(m));
         }
 
-        // B) Analyse de __NEXT_DATA__
+        // B) Analyse des scripts Next.js App Router (self.__next_f)
+        const scriptMatches = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)];
+        for (const sm of scriptMatches) {
+          const text = sm[1] || "";
+          if (text.includes("self.__next_f") || text.includes("logements/") || text.includes("PropertyType")) {
+            const lms = [...text.matchAll(/\/logements\/(\d+)/g)].map(m => m[1]);
+            for (const lm of lms) candidatePropIds.add(String(lm));
+            const pids = [...text.matchAll(/"propertyId"\s*:\s*"?(\d{5,8})"?/g)].map(m => m[1]);
+            for (const pid of pids) candidatePropIds.add(String(pid));
+          }
+        }
+
+        // C) Analyse de __NEXT_DATA__
         const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
         if (match) {
           try {
@@ -1679,7 +2315,7 @@ async function resolvePropertyIdsForContracts(accountNumber, contracts, property
                   for (const sp of sps) {
                     const prmVal = sp.marketSupplyPointId || sp.externalIdentifier || sp.prm || sp.id || sp.meterPoint?.id;
                     if (prmVal) {
-                      const cMatch = contracts.find(c => c.prm === String(prmVal));
+                      const cMatch = allContracts.find(c => c.prm === String(prmVal));
                       if (cMatch) {
                         cMatch.propertyId = pId;
                         toCache[`prop_id_${cMatch.prm}`] = pId;
@@ -1701,29 +2337,69 @@ async function resolvePropertyIdsForContracts(accountNumber, contracts, property
     console.warn("[Background] Erreur découverte Espace Client :", crawlErr.message);
   }
 
-  // 6. Déduction & Validation dynamique avec GetPropertyMeasurements
-  const remainingMissing = contracts.filter(c => !c.propertyId && c.prm && c.prm !== "-");
-  const alreadyUsedPropIds = new Set(contracts.map(c => c.propertyId).filter(Boolean));
-  const availablePropIds = [...candidatePropIds].filter(id => !alreadyUsedPropIds.has(id));
+  // 8. Règle bijective déterministe pour compte à 2 logements
+  if (allContracts.length === 2 && candidatePropIds.size >= 2) {
+    const c0 = allContracts[0];
+    const c1 = allContracts[1];
+    if (c0.propertyId && !c1.propertyId) {
+      const remaining = [...candidatePropIds].filter(id => id !== c0.propertyId);
+      if (remaining.length > 0) {
+        c1.propertyId = remaining[0];
+        toCache[`prop_id_${c1.prm}`] = remaining[0];
+        console.log(`[Background] 🎯 Résolution bijective : PRM ${c1.prm} -> logement ${remaining[0]}`);
+      }
+    } else if (c1.propertyId && !c0.propertyId) {
+      const remaining = [...candidatePropIds].filter(id => id !== c1.propertyId);
+      if (remaining.length > 0) {
+        c0.propertyId = remaining[0];
+        toCache[`prop_id_${c0.prm}`] = remaining[0];
+        console.log(`[Background] 🎯 Résolution bijective : PRM ${c0.prm} -> logement ${remaining[0]}`);
+      }
+    }
+  }
+
+  // 9. Déduction & Validation dynamique avec GetPropertyMeasurements
+  const missingContracts = allContracts.filter(c => !c.propertyId && c.prm && c.prm !== "-");
+  const usedPropIds = new Set(allContracts.map(c => c.propertyId).filter(Boolean));
 
   console.log("[Background] Résolution multi-logements :", {
-    remainingMissingPRMs: remainingMissing.map(c => c.prm),
-    availablePropIds: availablePropIds
+    missingPRMs: missingContracts.map(c => c.prm),
+    candidatePropIds: [...candidatePropIds],
+    usedPropIds: [...usedPropIds]
   });
 
-  // Pour chaque contrat encore sans propertyId, tester les availablePropIds
-  for (const c of remainingMissing) {
+  for (const c of missingContracts) {
+    // Calculer les identifiants encore disponibles
+    const available = [...candidatePropIds].filter(id => !usedPropIds.has(id));
+
+    // Si un seul ID candidat restant pour ce contrat manquant -> affectation immédiate par élimination
+    if (available.length === 1) {
+      const assigned = available[0];
+      console.log(`[Background] 🎯 Affectation par élimination : PRM ${c.prm} -> logement ${assigned}`);
+      c.propertyId = assigned;
+      toCache[`prop_id_${c.prm}`] = assigned;
+      usedPropIds.add(assigned);
+      try {
+        const testConso = await fetchMeasurementsByProperty(assigned, c.prm, c);
+        if (testConso && testConso.hasData) {
+          c.consoMensuelle = testConso;
+        }
+      } catch (_) {}
+      continue;
+    }
+
+    // Tester dynamiquement chaque candidat avec GetPropertyMeasurements
     let found = false;
-    for (const candId of availablePropIds) {
+    for (const candId of available) {
       try {
         console.log(`[Background] Test GetPropertyMeasurements avec propertyId=${candId} pour PRM ${c.prm}...`);
         const testConso = await fetchMeasurementsByProperty(candId, c.prm, c);
         if (testConso && testConso.hasData) {
           console.log(`[Background] Validé ! PRM ${c.prm} associé au logement ${candId}`);
           c.propertyId = candId;
-          c.consoMensuelle = testConso; // Conso pré-chargée !
+          c.consoMensuelle = testConso;
           toCache[`prop_id_${c.prm}`] = candId;
-          alreadyUsedPropIds.add(candId);
+          usedPropIds.add(candId);
           found = true;
           break;
         }
@@ -1732,10 +2408,22 @@ async function resolvePropertyIdsForContracts(accountNumber, contracts, property
       }
     }
 
-    // Si le test d'API n'a pas répondu mais qu'il n'y a qu'un seul ID disponible, association directe
-    if (!found && availablePropIds.length === 1) {
-      c.propertyId = availablePropIds[0];
-      toCache[`prop_id_${c.prm}`] = availablePropIds[0];
+    // Si le test n'a pas répondu mais qu'il ne reste qu'un candidat disponible après les tests
+    if (!found) {
+      const remainingAvail = [...candidatePropIds].filter(id => !usedPropIds.has(id));
+      if (remainingAvail.length === 1) {
+        c.propertyId = remainingAvail[0];
+        toCache[`prop_id_${c.prm}`] = remainingAvail[0];
+        usedPropIds.add(remainingAvail[0]);
+      }
+    }
+  }
+
+  // Reporter sur la liste contracts d'origine
+  for (const c of contracts) {
+    if (!c.propertyId) {
+      const matched = allContracts.find(a => String(a.id) === String(c.id) || a.prm === c.prm);
+      if (matched?.propertyId) c.propertyId = matched.propertyId;
     }
   }
 
@@ -1760,30 +2448,33 @@ async function enrichContractsWithConso(contracts, accountNumber, propertyMappin
     console.warn("[Background] Erreur resolvePropertyIdsForContracts :", resErr.message);
   }
 
-  await Promise.all(
-    contracts.map(async (c) => {
-      if (c.prm && c.prm !== "-") {
-        if (c.consoMensuelle && c.consoMensuelle.hasData) {
-          return;
-        }
-        try {
-          const conso = await fetchMonthlyConsumptionData(accountNumber, c.prm, c.propertyId, c, propertyMapping, propertyIds);
-          if (conso) {
-            c.consoMensuelle = conso;
-          }
-        } catch (consoErr) {
-          console.warn(`[Background] Suivi conso non disponible pour PRM ${c.prm} :`, consoErr.message);
-        }
+  // SÉQUENTIEL au lieu de Promise.all pour éviter que chaque contrat
+  // déclenche simultanément un performBackgroundSync et ouvre N onglets
+  for (const c of contracts) {
+    if (c.prm && c.prm !== "-") {
+      if (c.consoMensuelle && c.consoMensuelle.hasData) {
+        continue;
       }
-    })
-  );
+      try {
+        const conso = await fetchMonthlyConsumptionData(accountNumber, c.prm, c.propertyId, c, propertyMapping, propertyIds);
+        if (conso) {
+          c.consoMensuelle = conso;
+          if (conso.propertyId && !c.propertyId) {
+            c.propertyId = conso.propertyId;
+          }
+        }
+      } catch (consoErr) {
+        console.warn(`[Background] Suivi conso non disponible pour PRM ${c.prm} :`, consoErr.message);
+      }
+    }
+  }
   return contracts;
 }
 
 /**
  * Récupère le suivi de consommation pour un PRM spécifique
  */
-async function fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, contract = null, propertyMapping = [], propertyIds = []) {
+async function fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, contract = null, propertyMapping = [], propertyIds = [], tabId = null, forceSync = false) {
   if (!accountNumber || !prmId || prmId === "-") {
     return {
       hasData: false,
@@ -1791,61 +2482,213 @@ async function fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, con
     };
   }
 
-  console.log(`[Background] Récupération suivi conso pour compte ${accountNumber}, PRM ${prmId}, propertyId ${propertyId}...`);
+  console.log(`[Background] Récupération suivi conso pour compte ${accountNumber}, PRM ${prmId}, propertyId initial ${propertyId}...`);
 
-  // Résolution de propertyId si manquant
-  if (!propertyId) {
+  // 1. Déterminer un onglet Kraken support valide pour masquerade
+  let krakenTabId = null;
+  try {
+    const krakenTabs = await chrome.tabs.query({ url: "https://support.oefr-kraken.energy/*" });
+    const matching = krakenTabs.find(t => t.url && t.url.includes(accountNumber)) || krakenTabs[0];
+    if (matching) krakenTabId = matching.id;
+  } catch (_) {}
+  if (!krakenTabId && tabId) {
     try {
-      const cache = await chrome.storage.local.get([`prop_id_${prmId}`]);
-      propertyId = cache[`prop_id_${prmId}`] || null;
-      if (!propertyId && prmId === "17566859598256") {
-        propertyId = "717277";
-      }
-      if (!propertyId && prmId === "09196092568363") {
-        propertyId = "866908";
-      }
-      if (!propertyId && contract) {
-        await resolvePropertyIdsForContracts(accountNumber, [contract], propertyMapping, propertyIds);
-        propertyId = contract.propertyId || null;
+      const t = await chrome.tabs.get(tabId).catch(() => null);
+      if (t && t.url && t.url.includes("support.oefr-kraken.energy")) {
+        krakenTabId = t.id;
       }
     } catch (_) {}
   }
 
-  // 1. Tenter la requête officielle Espace Client GetPropertyMeasurements
-  let propertyConso = null;
-  if (propertyId) {
+  let currentPropIds = Array.isArray(propertyIds) ? [...propertyIds] : [];
+  let currentMapping = Array.isArray(propertyMapping) ? [...propertyMapping] : [];
+
+  // Si propertyId est manquant et propertyIds/propertyMapping sont vides, tenter l'extraction directe sur l'onglet Kraken
+  if ((!propertyId || currentPropIds.length === 0) && krakenTabId) {
     try {
-      propertyConso = await fetchMeasurementsByProperty(propertyId, prmId, contract);
+      const domContext = await extractTabContextForPreload(krakenTabId, true);
+      if (domContext) {
+        if (currentPropIds.length === 0 && domContext.propertyIds?.length > 0) currentPropIds = domContext.propertyIds;
+        if (currentMapping.length === 0 && domContext.propertyMapping?.length > 0) currentMapping = domContext.propertyMapping;
+      }
+    } catch (_) {}
+  }
+
+  // 2. Résolution intelligente et mise en cache du propertyId
+  if (!propertyId) {
+    try {
+      // A) Recherche dans le mapping DOM direct
+      if (Array.isArray(currentMapping) && currentMapping.length > 0) {
+        const m = currentMapping.find(item => item.prm === String(prmId) || (contract && String(item.agreementId) === String(contract.id)));
+        if (m && m.propertyId) {
+          propertyId = String(m.propertyId);
+        }
+      }
+
+      // B) Recherche dans le cache local (uniquement si non obsolète et sans collision)
+      if (!propertyId) {
+        const cache = await chrome.storage.local.get([`prop_id_${prmId}`]);
+        const cachedPid = cache[`prop_id_${prmId}`] || null;
+        if (cachedPid && cachedPid !== "717277") {
+          let hasCollision = false;
+          const cachedAcc = await getCachedAccount(accountNumber);
+          if (cachedAcc && Array.isArray(cachedAcc)) {
+            const other = cachedAcc.find(c => c.prm && c.prm !== prmId && String(c.propertyId) === String(cachedPid));
+            if (other) hasCollision = true;
+          }
+          if (!hasCollision) {
+            propertyId = cachedPid;
+          } else {
+            await chrome.storage.local.remove([`prop_id_${prmId}`]);
+          }
+        } else if (cachedPid === "717277") {
+          await chrome.storage.local.remove([`prop_id_${prmId}`]);
+        }
+      }
+
+      // C) Si un seul ID de propriété existe sur la page Kraken ET qu'il n'y a qu'un seul contrat élec sur le compte
+      if (!propertyId && currentPropIds.length === 1) {
+        const cachedAcc = await getCachedAccount(accountNumber);
+        const distinctPrms = (cachedAcc && Array.isArray(cachedAcc))
+          ? [...new Set(cachedAcc.map(c => c.prm).filter(p => p && p !== "-"))]
+          : [];
+        if (distinctPrms.length <= 1) {
+          propertyId = String(currentPropIds[0]);
+        }
+      }
+
+      // D) Résolution contextuelle avec l'ensemble des contrats
+      if (!propertyId && contract) {
+        let contractsToResolve = [contract];
+        const cached = await getCachedAccount(accountNumber);
+        if (cached && Array.isArray(cached) && cached.length > 0) {
+          contractsToResolve = cached.map(c => String(c.id) === String(contract.id) || c.prm === contract.prm ? contract : c);
+        }
+        await resolvePropertyIdsForContracts(accountNumber, contractsToResolve, currentMapping, currentPropIds);
+        const found = contractsToResolve.find(c => c.prm === prmId || String(c.id) === String(contract.id));
+        if (found?.propertyId) {
+          propertyId = found.propertyId;
+          contract.propertyId = found.propertyId;
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 3. Tenter la requête officielle Espace Client GetPropertyMeasurements
+  let propertyConso = null;
+  let authErrorOccurred = false;
+
+  const tryGetPropertyMeasurements = async (pid) => {
+    if (!pid) return null;
+    try {
+      return await fetchMeasurementsByProperty(pid, prmId, contract);
     } catch (pErr) {
-      console.warn(`[Background] Échec fetchMeasurementsByProperty pour property ${propertyId} :`, pErr.message);
+      if (pErr.message && (pErr.message.includes("AUTH") || pErr.message.includes("401") || pErr.message.includes("403"))) {
+        authErrorOccurred = true;
+      }
+      console.warn(`[Background] Échec fetchMeasurementsByProperty pour property ${pid} :`, pErr.message);
+      return null;
+    }
+  };
+
+  if (propertyId) {
+    propertyConso = await tryGetPropertyMeasurements(propertyId);
+  }
+
+  // Si le propertyId testé n'a rien renvoyé (mauvais logement ou cache périmé), tester les autres candidats disponibles
+  if ((!propertyConso || !propertyConso.hasData) && !authErrorOccurred && currentPropIds.length > 0) {
+    for (const altPid of currentPropIds) {
+      if (String(altPid) === String(propertyId)) continue;
+      console.log(`[Background] 🔄 Test alternatif propertyId=${altPid} pour PRM ${prmId}...`);
+      const altConso = await tryGetPropertyMeasurements(altPid);
+      if (altConso && altConso.hasData) {
+        console.log(`[Background] 🎯 Succès avec propertyId alternatif ${altPid} pour PRM ${prmId} !`);
+        propertyId = String(altPid);
+        propertyConso = altConso;
+        await chrome.storage.local.set({ [`prop_id_${prmId}`]: propertyId });
+        break;
+      }
     }
   }
 
-  // Si les mesures officielles par propriété sont disponibles, retour immédiat (gain de 2 à 3 secondes)
+  // 4. Synchronisation de session UNIQUEMENT sur erreur d'authentification avérée ou forceSync explicite
+  // Ne PAS déclencher de sync masquerade simplement parce que les données sont absentes
+  // (elles pourraient ne pas encore exister côté Enedis)
+  const needsSync = (authErrorOccurred || forceSync) && krakenTabId;
+  if (needsSync) {
+    console.log(`[Background] 🔄 Session requise (auth=${authErrorOccurred}, force=${forceSync}), exécution de performBackgroundSync...`);
+    try {
+      await performBackgroundSync(krakenTabId, accountNumber, contract?.id ? [contract.id] : null, currentMapping, currentPropIds);
+      authErrorOccurred = false;
+
+      // Re-résolution avec la session fraîche
+      let contractsToResolve = contract ? [contract] : [];
+      const cached = await getCachedAccount(accountNumber);
+      if (cached && Array.isArray(cached) && cached.length > 0) {
+        contractsToResolve = cached.map(c => String(c.id) === String(contract?.id) || c.prm === contract?.prm ? contract : c);
+      }
+      await resolvePropertyIdsForContracts(accountNumber, contractsToResolve, currentMapping, currentPropIds);
+      const foundAfterSync = contractsToResolve.find(c => c.prm === prmId || String(c.id) === String(contract?.id));
+      if (foundAfterSync?.propertyId) {
+        propertyId = foundAfterSync.propertyId;
+        if (contract) contract.propertyId = foundAfterSync.propertyId;
+      }
+
+      // Retenter GetPropertyMeasurements avec les nouveaux cookies de session
+      if (propertyId) {
+        propertyConso = await tryGetPropertyMeasurements(propertyId);
+      }
+
+      // Si toujours pas de données, tester tous les propertyIds découverts
+      if ((!propertyConso || !propertyConso.hasData) && currentPropIds.length > 0) {
+        for (const altPid of currentPropIds) {
+          if (String(altPid) === String(propertyId)) continue;
+          const altConso = await tryGetPropertyMeasurements(altPid);
+          if (altConso && altConso.hasData) {
+            propertyId = String(altPid);
+            propertyConso = altConso;
+            await chrome.storage.local.set({ [`prop_id_${prmId}`]: propertyId });
+            break;
+          }
+        }
+      }
+    } catch (syncErr) {
+      console.warn("[Background] Échec performBackgroundSync pour suivi conso :", syncErr.message);
+    }
+  }
+
+  // Si les mesures officielles par propriété sont disponibles, mise en cache et retour immédiat
   if (propertyConso && propertyConso.hasData) {
+    propertyConso.propertyId = propertyId;
+    if (propertyId) {
+      await chrome.storage.local.set({ [`prop_id_${prmId}`]: propertyId });
+    }
     return propertyConso;
   }
 
-  // 2. Repli sur les relevés Linky GraphQL Relay
+  // 5. Repli sur les relevés Linky GraphQL Relay
   const readingNodes = await fetchAllElectricityReadingsForPrm(accountNumber, prmId);
   if (readingNodes && readingNodes.length > 0) {
     const aggregated = aggregateReadingsByMonth(readingNodes, contract);
     if (aggregated && aggregated.hasData) {
+      if (propertyId) aggregated.propertyId = propertyId;
       console.log(`[Background] Suivi conso obtenu via Relay pour PRM ${prmId} (${aggregated.totalMoisDisponibles} mois).`);
       return aggregated;
     }
   }
 
-  // 3. Repli sur la page Next.js suivi-conso
+  // 6. Repli sur la page Next.js suivi-conso
   if (propertyId) {
     const pageData = await fetchSuiviConsoPageData(accountNumber, propertyId, contract);
     if (pageData && pageData.hasData) {
+      pageData.propertyId = propertyId;
       return pageData;
     }
   }
 
   return {
     hasData: false,
+    propertyId: propertyId || null,
     message: "Données de consommation en cours de synchronisation par Enedis."
   };
 }
@@ -1902,8 +2745,7 @@ async function fetchAllElectricityReadingsForPrm(accountNumber, prmId) {
         const nodes = edges.map(e => e?.node).filter(Boolean);
         const dates = nodes.map(n => n.periodStartAt || n.periodEndAt).filter(Boolean).sort();
         const latest = dates[dates.length - 1];
-        // Si les relevés contiennent bien les jours récents (août ou septembre 2026)
-        if (latest && latest >= "2026-08") {
+        if (nodes.length > 0) {
           console.log(`[Background] Relevés récents 'last: 100' validés pour PRM ${prmId} (${nodes.length} nœuds, max: ${latest})`);
           return nodes;
         }
