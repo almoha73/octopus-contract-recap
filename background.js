@@ -3709,10 +3709,14 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
       const sousTypeDemande = aff.demande?.sousTypeDemande ||
         d.demande?.demandeTechnique?.type?.libelle ||
         d.demande?.prestations?.[0]?.fiche?.libelle ||
+        d.typeDemandeDiverse?.sousTypeDemande?.libelle ||
+        d.demande?.demandeDiverse?.typeDemandeDiverse?.sousTypeDemande?.libelle ||
         "Demande";
       const sousTypeDemandeCode = aff.demande?.sousTypeDemandeCode ||
         d.demande?.demandeTechnique?.type?.code ||
         d.demande?.prestations?.[0]?.fiche?.code ||
+        d.typeDemandeDiverse?.sousTypeDemande?.code ||
+        d.demande?.demandeDiverse?.typeDemandeDiverse?.sousTypeDemande?.code ||
         "";
 
       // Prestation principale
@@ -3720,10 +3724,12 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
       if (Array.isArray(d.demande?.prestations) && d.demande.prestations.length > 0) {
         const p0 = d.demande.prestations[0];
         prestationLibelle = p0.fiche?.libelle ? `${p0.fiche.libelle}${p0.fiche.code ? ` (${p0.fiche.code})` : ""}` : null;
+      } else if (d.demande?.prestation?.ficheCode) {
+        prestationLibelle = d.demande.prestation.ficheCode;
       }
 
       // Dates
-      const dateDemande = d.demande?.dateHeure || d.demande?.dateCreationDemande || null;
+      const dateDemande = d.demande?.dateHeure || d.demande?.dateCreationDemande || d.demande?.dateTechCreation || null;
       const dateDemandeFormatee = formatSgeFrenchDate(dateDemande);
       const dateEffetSouhaitee = d.demande?.dateEffetSouhaitee || null;
       const dateEffetSouhaiteeFormatee = formatSgeFrenchDate(dateEffetSouhaitee);
@@ -3731,13 +3737,13 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
       // Référence demandeur & Initiateur
       const refDemandeur = d.demande?.referenceDemandeur || null;
       let initiateurNom = null;
-      if (d.demande?.initiateur) {
-        const init = d.demande.initiateur;
-        const civilite = init.identite?.civilite || "";
-        const prenom = init.identite?.prenom || "";
-        const nom = init.identite?.nom || "";
-        const acteur = init.acteurAppartenance?.libelle || "";
-        const nomComplet = [civilite, prenom, nom].filter(Boolean).join(" ");
+      const init = d.demande?.initiateur || d.initiateur;
+      if (init) {
+        const civilite = init.identite?.civilite || init.personne?.personnePhysique?.civilite || "";
+        const prenom = init.identite?.prenom || init.personne?.personnePhysique?.prenom || "";
+        const nom = init.identite?.nom || init.personne?.personnePhysique?.nom || "";
+        const acteur = init.acteurAppartenance?.libelle || init.codeACM?.libelle || "";
+        const nomComplet = [civilite, prenom, nom].filter(Boolean).join(" ").trim();
         initiateurNom = acteur ? `${acteur}${nomComplet ? ` (${nomComplet})` : ""}` : nomComplet;
       }
 
@@ -3751,9 +3757,11 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
         });
         const lastJalon = sortedJalons[sortedJalons.length - 1];
         if (lastJalon) {
+          const libelleJalon = lastJalon.affaireEtat?.libelle || lastJalon.affaireEtat?.code || lastJalon.affaireEtatExterne || lastJalon.affaireEtatInterne || "-";
+          const codeJalon = lastJalon.affaireEtat?.code || lastJalon.affaireEtatExterne || null;
           dernierJalon = {
-            libelle: lastJalon.affaireEtat?.libelle || lastJalon.affaireEtat?.code || "-",
-            code: lastJalon.affaireEtat?.code || null,
+            libelle: libelleJalon,
+            code: codeJalon,
             date: formatSgeFrenchDate(lastJalon.dateHeure || lastJalon.affaireDateEffet)
           };
         }
@@ -3764,11 +3772,24 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
                         d.demande?.commentaire || 
                         d.demande?.commentaireClient ||
                         d.demande?.observations ||
+                        d.demande?.demandeDiverse?.commentaire ||
                         d.demande?.demandeTechnique?.commentaire ||
                         d.demande?.demandeTechnique?.observations ||
                         (Array.isArray(d.demande?.prestations) && d.demande.prestations.length > 0 ? d.demande.prestations[0].commentaire : null) ||
                         null;
                         
+      // Relances
+      let relancesStr = "";
+      if (Array.isArray(d.relances) && d.relances.length > 0) {
+        const sortedRelances = [...d.relances].sort((a, b) => new Date(b.dateHeure || 0).getTime() - new Date(a.dateHeure || 0).getTime());
+        const formattedRelances = sortedRelances.map(r => {
+          const dateR = formatSgeFrenchDate(r.dateHeure);
+          const nom = r.initiateur?.prenom ? `${r.initiateur.prenom} ${r.initiateur.nom || ""}`.trim() : (r.initiateur?.nom || "");
+          return `[Relance ${dateR}${nom ? ` par ${nom}` : ""}] ${r.commentaire || ""}`;
+        });
+        relancesStr = formattedRelances.join("\n\n");
+      }
+
       if (!commentaire && Array.isArray(d.interventions)) {
         for (const it of d.interventions) {
           if (Array.isArray(it.demandesInterventions)) {
@@ -3785,6 +3806,10 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
           }
           if (commentaire) break;
         }
+      }
+
+      if (relancesStr) {
+        commentaire = commentaire ? `${commentaire}\n\n---\n\n${relancesStr}` : relancesStr;
       }
 
       // Opérations prévues
