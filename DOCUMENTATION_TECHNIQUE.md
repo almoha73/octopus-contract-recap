@@ -548,4 +548,29 @@ Dès que le conseiller clique sur l'icône de l'extension pour ouvrir la synthè
 4. **Mise en cache locale 30 minutes :**
    Les données techniques SGE (puissance souscrite, formule tarifaire, calibre disjoncteur, plages HC Enedis, état d'alimentation) sont mises en cache pour 30 minutes, offrant une restitution instantanée lors des consultations suivantes du même compte.
 
+### D. Recherche et Affichage des Affaires SGE en Cours (Interventions & Dossiers)
+
+1. **Architecture & Endpoints Enedis Microapps :**
+   En complément des situations techniques et contractuelles, l'extension interroge en temps réel les APIs d'affaires Enedis :
+   - **Recherche globale des affaires du PRM :**
+     `GET https://mfa.microapps.enedis.fr/apoge/api/partenaires/rechercheAffaire?idPrm={idPrm}`
+   - **Détail complet d'une affaire active :**
+     `GET https://mfa.microapps.enedis.fr/{applicationSource}/api/affaires/{idAffaire}`
+     (où `applicationSource` correspond à la brique Enedis, typiquement `adc5`).
+
+2. **Données Métier Restituées :**
+   - **Numéro d'affaire & Accès direct :** Affichage de l'identifiant (`idAffaire`, ex: `G0BN25NR`) avec bouton de copie 1-clic et lien direct d'ouverture dans SGE (`https://sge.enedis.fr/adc5/?wc=consultation&id={idAffaire}`).
+   - **Statut & Jalon courant :** Badge d'état visuel (*En cours*, *Terminée*) avec le dernier jalon franchi (`INPL` - Intervention planifiée, date et heure du jalon).
+   - **Nature de la demande :** Sous-type de demande et prestation Enedis (ex: `F920 - Enquête`).
+   - **Planification & RDV d'intervention :** Date d'intervention prévue, créneau horaire détaillé (ex: `Matin (08:00 – 12:00)`), mode de réalisation (*Sur site* / *Télé-opéré*), opérations programmées (`Enquête`, `Relevé d'index`) et indicateur de présence client obligatoire (*Oui* / *Non*).
+   - **Commentaire de la demande :** Restitution intégrale du message/commentaire saisi lors de la création de l'affaire dans un bloc stylisé avec bordure d'accentuation.
+   - **Initiateur & Traçabilité :** Entité demandeuse (ex: `Octopus Energy France`), identité du conseiller et référence demandeur Kraken (`A-XXXXXXXX`).
+
+3. **Restitution dans l'Interface et dans le Presse-Papier :**
+   - **Encart prioritaire `#sgeAffairesBox` :** Situé en tête de la fiche SGE, attire immédiatement l'attention du conseiller sur d'éventuels dossiers ou litiges en cours.
+   - **État vierge sécurisant :** Si aucune affaire n'est active sur le PRM, un message explicite `✅ Aucune affaire Enedis en cours sur ce PRM` confirme au conseiller qu'aucun blocage distributeur n'est en suspens.
+   - **Accordéon d'historique :** Les affaires clôturées ou passées sont regroupées dans un panneau repliable `<details>` pour ne pas surcharger l'affichage principal.
+   - **Export 1 clic dans le récapitulatif complet :** Le bouton de copie générale intègre automatiquement une section dédiée `📋 AFFAIRES SGE EN COURS` avec l'ensemble des détails formatés pour un partage immédiat.
+
+
 

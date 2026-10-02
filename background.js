@@ -2405,7 +2405,7 @@ async function handleFetchSgeData(payload) {
       const cacheKey = `sge_cache_${prmStr}`;
       const stored = await chrome.storage.local.get([cacheKey]);
       const item = stored[cacheKey];
-      if (item && item.data && (Date.now() - (item.cachedAt || 0)) < SGE_CACHE_TTL_MS) {
+      if (item && item.data && item.data.affaires !== undefined && (Date.now() - (item.cachedAt || 0)) < SGE_CACHE_TTL_MS) {
         console.log(`[Background] ⚡ SGE depuis cache pour PRM ${prmStr}`);
         return item.data;
       }
@@ -2446,25 +2446,60 @@ async function handleFetchSgeData(payload) {
       target: { tabId: sgeTab.id },
       world: "MAIN",
       func: (prmId, apiBase, resultId) => {
-        const fetchApi = async (endpoint) => {
-          const url = `${apiBase}/${endpoint}/${prmId}`;
+        const fetchUrl = async (url) => {
           const res = await fetch(url, {
             method: "GET",
             credentials: "include",
             headers: { "Accept": "application/json" }
           });
           if (!res.ok) {
-            throw new Error(`HTTP ${res.status} pour ${endpoint}`);
+            throw new Error(`HTTP ${res.status}`);
           }
           return res.json();
         };
 
+        const fetchPrm = (endpoint) => fetchUrl(`${apiBase}/${endpoint}/${prmId}`);
+
         Promise.all([
-          fetchApi("situation-alimentation").catch(e => ({ error: e.message })),
-          fetchApi("situation-comptage").catch(e => ({ error: e.message })),
-          fetchApi("situations-contractuelles").catch(e => ({ error: e.message }))
-        ]).then(([alimentation, comptage, contractuel]) => {
-          const result = { alimentation, comptage, contractuel, done: true };
+          fetchPrm("situation-alimentation").catch(e => ({ error: e.message })),
+          fetchPrm("situation-comptage").catch(e => ({ error: e.message })),
+          fetchPrm("situations-contractuelles").catch(e => ({ error: e.message })),
+          fetchUrl(`https://mfa.microapps.enedis.fr/apoge/api/partenaires/rechercheAffaire?idPrm=${prmId}`).catch(e => ({ error: e.message }))
+        ]).then(async ([alimentation, comptage, contractuel, affairesRaw]) => {
+          let affairesList = [];
+          if (affairesRaw && !affairesRaw.error) {
+            const dossiers = Array.isArray(affairesRaw.dossierDTO) ? affairesRaw.dossierDTO : [];
+            const affairesWithDetails = await Promise.all(
+              dossiers.map(async (dossier) => {
+                const statutStr = String(typeof dossier.statut === "string" ? dossier.statut : (dossier.statut?.code || "")).toUpperCase();
+                const isEnCours = statutStr === "COURS";
+                let detail = null;
+                // Récupérer le détail pour les affaires en cours, ou les 3 premières si aucune en cours
+                if (isEnCours || dossiers.length <= 3) {
+                  try {
+                    const app = (dossier.applicationSource ? String(dossier.applicationSource).toLowerCase() : "adc5");
+                    detail = await fetchUrl(`https://mfa.microapps.enedis.fr/${app}/api/affaires/${dossier.idAffaire}`);
+                  } catch (err) {
+                    console.warn(`[SGE Script] Erreur détail affaire ${dossier.idAffaire}:`, err);
+                  }
+                }
+                return {
+                  ...dossier,
+                  detail
+                };
+              })
+            );
+            affairesList = affairesWithDetails;
+          }
+
+          const result = {
+            alimentation,
+            comptage,
+            contractuel,
+            affaires: affairesList,
+            done: true
+          };
+
           let el = document.getElementById(resultId);
           if (!el) {
             el = document.createElement("div");
@@ -2540,7 +2575,8 @@ async function handleFetchSgeData(payload) {
   if (rawResult.comptage?.error) errors.push(`Comptage: ${rawResult.comptage.error}`);
   if (rawResult.contractuel?.error) errors.push(`Contractuel: ${rawResult.contractuel.error}`);
 
-  if (errors.length === 3) {
+  const hasAffaires = Array.isArray(rawResult.affaires) && rawResult.affaires.length > 0;
+  if (errors.length === 3 && !hasAffaires) {
     throw new Error(`Accès aux données SGE refusé (${errors[0]}). Vérifiez votre session SGE sur l'onglet.`);
   }
 
@@ -2549,7 +2585,8 @@ async function handleFetchSgeData(payload) {
     rawResult.alimentation,
     rawResult.comptage,
     rawResult.contractuel,
-    prmStr
+    prmStr,
+    rawResult.affaires
   );
 
   if (formatted.hasData) {
@@ -2604,9 +2641,42 @@ function waitForTabComplete(tabId, timeoutMs) {
 }
 
 /**
+ * Formate une date ISO ou standard en date française JJ/MM/AAAA
+ */
+function formatSgeFrenchDate(dateStr) {
+  if (!dateStr) return "-";
+  try {
+    const cleaned = String(dateStr).replace(" ", "T");
+    const d = new Date(cleaned);
+    if (isNaN(d.getTime())) return String(dateStr);
+    return d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
+  } catch (_) {
+    return String(dateStr);
+  }
+}
+
+/**
+ * Formate une plage horaire pour un rendez-vous SGE
+ */
+function formatSgeTimeRange(startStr, endStr, slotLabel) {
+  let timeStr = "";
+  if (startStr && endStr) {
+    const sMatch = String(startStr).match(/(\d{2}:\d{2})/);
+    const eMatch = String(endStr).match(/(\d{2}:\d{2})/);
+    if (sMatch && eMatch) {
+      timeStr = `${sMatch[1]} – ${eMatch[1]}`;
+    }
+  }
+  if (slotLabel && timeStr) {
+    return `${slotLabel} (${timeStr})`;
+  }
+  return slotLabel || timeStr || "-";
+}
+
+/**
  * Formate les données brutes des APIs SGE en un objet structuré pour le popup
  */
-function formatSgeData(alimentation, comptage, contractuel, prm) {
+function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList) {
   const result = {
     prm: prm,
     hasData: false,
@@ -2645,7 +2715,11 @@ function formatSgeData(alimentation, comptage, contractuel, prm) {
     calendrierFournisseur: null,
     calendrierFournisseurCode: null,
     formuleTarifaire: null,
-    formuleTarifaireCode: null
+    formuleTarifaireCode: null,
+    // Affaires SGE Enedis
+    affaires: [],
+    nbAffairesEnCours: 0,
+    hasAffairesEnCours: false
   };
 
   // Traitement de la situation d'alimentation
@@ -2773,6 +2847,179 @@ function formatSgeData(alimentation, comptage, contractuel, prm) {
         result.formuleTarifaire = st.formuleTarifaireAcheminement.libelle || st.formuleTarifaireAcheminement.code || "-";
         result.formuleTarifaireCode = st.formuleTarifaireAcheminement.code || null;
       }
+    }
+  }
+
+  // Traitement des affaires SGE (rechercheAffaire & détail affaire)
+  if (Array.isArray(affairesRawList)) {
+    result.affaires = affairesRawList.map(aff => {
+      const d = aff.detail || {};
+      const appSource = (aff.applicationSource ? String(aff.applicationSource).toLowerCase() : "adc5");
+      const idAffaire = aff.idAffaire || d.affaireId || "-";
+      const urlSge = `https://sge.enedis.fr/${appSource}/?wc=consultation&id=${idAffaire}`;
+
+      // Statut
+      const rawStatut = (typeof aff.statut === "string" ? aff.statut : aff.statut?.code) || d.statut?.code || "";
+      const isEnCours = String(rawStatut).toUpperCase() === "COURS" || String(d.statut?.code || "").toUpperCase() === "COURS";
+      const statutLibelle = d.statut?.libelle || (isEnCours ? "En cours" : rawStatut || "-");
+
+      // Type de demande & sous-type
+      const sousTypeDemande = aff.demande?.sousTypeDemande ||
+        d.demande?.demandeTechnique?.type?.libelle ||
+        d.demande?.prestations?.[0]?.fiche?.libelle ||
+        "Demande";
+      const sousTypeDemandeCode = aff.demande?.sousTypeDemandeCode ||
+        d.demande?.demandeTechnique?.type?.code ||
+        d.demande?.prestations?.[0]?.fiche?.code ||
+        "";
+
+      // Prestation principale
+      let prestationLibelle = null;
+      if (Array.isArray(d.demande?.prestations) && d.demande.prestations.length > 0) {
+        const p0 = d.demande.prestations[0];
+        prestationLibelle = p0.fiche?.libelle ? `${p0.fiche.libelle}${p0.fiche.code ? ` (${p0.fiche.code})` : ""}` : null;
+      }
+
+      // Dates
+      const dateDemande = d.demande?.dateHeure || d.demande?.dateCreationDemande || null;
+      const dateDemandeFormatee = formatSgeFrenchDate(dateDemande);
+      const dateEffetSouhaitee = d.demande?.dateEffetSouhaitee || null;
+      const dateEffetSouhaiteeFormatee = formatSgeFrenchDate(dateEffetSouhaitee);
+
+      // Référence demandeur & Initiateur
+      const refDemandeur = d.demande?.referenceDemandeur || null;
+      let initiateurNom = null;
+      if (d.demande?.initiateur) {
+        const init = d.demande.initiateur;
+        const civilite = init.identite?.civilite || "";
+        const prenom = init.identite?.prenom || "";
+        const nom = init.identite?.nom || "";
+        const acteur = init.acteurAppartenance?.libelle || "";
+        const nomComplet = [civilite, prenom, nom].filter(Boolean).join(" ");
+        initiateurNom = acteur ? `${acteur}${nomComplet ? ` (${nomComplet})` : ""}` : nomComplet;
+      }
+
+      // Dernier jalon
+      let dernierJalon = null;
+      if (Array.isArray(d.jalons) && d.jalons.length > 0) {
+        const sortedJalons = [...d.jalons].sort((a, b) => {
+          const ta = new Date(a.dateHeure || a.affaireDateEffet || 0).getTime();
+          const tb = new Date(b.dateHeure || b.affaireDateEffet || 0).getTime();
+          return ta - tb;
+        });
+        const lastJalon = sortedJalons[sortedJalons.length - 1];
+        if (lastJalon) {
+          dernierJalon = {
+            libelle: lastJalon.affaireEtat?.libelle || lastJalon.affaireEtat?.code || "-",
+            code: lastJalon.affaireEtat?.code || null,
+            date: formatSgeFrenchDate(lastJalon.dateHeure || lastJalon.affaireDateEffet)
+          };
+        }
+      }
+
+      // Commentaire intervention (chercher dans interventions ou demande)
+      let commentaire = d.demande?.commentaireIntervention || null;
+      if (!commentaire && Array.isArray(d.interventions)) {
+        for (const it of d.interventions) {
+          if (Array.isArray(it.demandesInterventions)) {
+            for (const di of it.demandesInterventions) {
+              if (di.commentaireIntervention && di.commentaireIntervention.trim()) {
+                commentaire = di.commentaireIntervention.trim();
+                break;
+              }
+            }
+          }
+          if (commentaire) break;
+        }
+      }
+
+      // Opérations prévues
+      const operations = [];
+      if (Array.isArray(d.interventions)) {
+        for (const it of d.interventions) {
+          if (Array.isArray(it.operations)) {
+            for (const op of it.operations) {
+              if (op.libelle && !operations.includes(op.libelle)) {
+                operations.push(op.libelle);
+              }
+            }
+          }
+        }
+      }
+      if (operations.length === 0 && Array.isArray(d.recevabilite?.operations)) {
+        for (const op of d.recevabilite.operations) {
+          if (op.libelle && !operations.includes(op.libelle)) {
+            operations.push(op.libelle);
+          } else if (op.code && !operations.includes(op.code)) {
+            operations.push(op.code);
+          }
+        }
+      }
+
+      // Planification / RDV d'intervention
+      let rdvInfo = null;
+      if (Array.isArray(d.interventions)) {
+        for (let i = d.interventions.length - 1; i >= 0; i--) {
+          const it = d.interventions[i];
+          if (Array.isArray(it.planifications) && it.planifications.length > 0) {
+            const sortedPlanifs = [...it.planifications].sort((a, b) => {
+              const ta = new Date(a.dateCreation || a.datePrevue || 0).getTime();
+              const tb = new Date(b.dateCreation || b.datePrevue || 0).getTime();
+              return ta - tb;
+            });
+            const lastPlanif = sortedPlanifs[sortedPlanifs.length - 1];
+            if (lastPlanif) {
+              const creneau = lastPlanif.surSite?.creneauHorairePrevu?.libelle ||
+                              lastPlanif.creneauHorairePrevu || null;
+              const debut = lastPlanif.heureDebutPrevue || lastPlanif.surSite?.heureDebutPrevue || null;
+              const fin = lastPlanif.heureFinPrevue || lastPlanif.surSite?.heureFinPrevue || null;
+              const dateP = lastPlanif.heureDebutPrevue || lastPlanif.datePrevue || null;
+
+              rdvInfo = {
+                datePrevue: formatSgeFrenchDate(dateP),
+                creneauHoraire: formatSgeTimeRange(debut, fin, creneau),
+                modeRealisation: lastPlanif.modeRealisation?.libelle || lastPlanif.modeRealisation?.code || "Sur site",
+                standardRealisation: lastPlanif.standardRealisation?.libelle || null
+              };
+              break;
+            }
+          }
+        }
+      }
+
+      // Présence client obligatoire
+      let presenceClient = null;
+      if (d.recevabilite?.presenceClientObligatoire !== undefined && d.recevabilite.presenceClientObligatoire !== null) {
+        presenceClient = d.recevabilite.presenceClientObligatoire ? "Oui (Obligatoire)" : "Non (Pas nécessaire)";
+      }
+
+      return {
+        idAffaire,
+        urlSge,
+        isEnCours,
+        statutCode: rawStatut,
+        statutLibelle,
+        sousTypeDemande,
+        sousTypeDemandeCode,
+        prestationLibelle,
+        dateDemande: dateDemandeFormatee,
+        dateEffetSouhaitee: dateEffetSouhaiteeFormatee,
+        refDemandeur,
+        initiateur: initiateurNom,
+        dernierJalon,
+        commentaire,
+        operations: operations.join(", "),
+        rdvInfo,
+        presenceClient,
+        segment: aff.segment || d.donneesPoint?.segmentClientele || null,
+        applicationSource: aff.applicationSource || "ADC5"
+      };
+    });
+
+    result.nbAffairesEnCours = result.affaires.filter(a => a.isEnCours).length;
+    result.hasAffairesEnCours = result.nbAffairesEnCours > 0;
+    if (result.affaires.length > 0) {
+      result.hasData = true;
     }
   }
 

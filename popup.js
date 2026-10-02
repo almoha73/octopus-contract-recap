@@ -138,6 +138,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Éléments du bloc SGE Enedis
   const sgeCard = document.getElementById("sgeCard");
   const badgeSgeStatus = document.getElementById("badgeSgeStatus");
+  const sgeAffairesBox = document.getElementById("sgeAffairesBox");
   const sgeAlimBox = document.getElementById("sgeAlimBox");
   const sgeEtatAlim = document.getElementById("sgeEtatAlim");
   const sgePuissanceRaccordement = document.getElementById("sgePuissanceRaccordement");
@@ -1519,6 +1520,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!sgeCard) return;
 
     if (!sge || !sge.hasData) {
+      if (sgeAffairesBox) sgeAffairesBox.classList.add("hidden");
       if (sgeAlimBox) sgeAlimBox.classList.add("hidden");
       if (sgeComptageBox) sgeComptageBox.classList.add("hidden");
       if (sgeContractuelBox) sgeContractuelBox.classList.add("hidden");
@@ -1543,6 +1545,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (syncSgeBtn) {
       const btnSpan = syncSgeBtn.querySelector("span");
       if (btnSpan) btnSpan.textContent = "🔄 Actualiser les données SGE";
+    }
+
+    // Encart Affaires en cours SGE
+    if (sgeAffairesBox) {
+      renderSgeAffaires(sgeAffairesBox, sge.affaires);
     }
 
     // Encart Alimentation
@@ -1605,6 +1612,304 @@ document.addEventListener("DOMContentLoaded", () => {
         sgeContractuelBox.classList.add("hidden");
       }
     }
+  }
+
+  /**
+   * Construit et affiche l'encart Affaires SGE Enedis de manière 100% sécurisée
+   */
+  function renderSgeAffaires(affairesBox, affaires) {
+    if (!affairesBox) return;
+
+    // Vider le conteneur en toute sécurité
+    while (affairesBox.firstChild) {
+      affairesBox.removeChild(affairesBox.firstChild);
+    }
+
+    // Cas où aucune affaire n'existe sur le PRM
+    if (!Array.isArray(affaires) || affaires.length === 0) {
+      affairesBox.classList.remove("hidden");
+      const emptyRow = document.createElement("div");
+      emptyRow.className = "sge-affaires-empty";
+
+      const icon = document.createElement("span");
+      icon.className = "sge-affaires-empty-icon";
+      icon.textContent = "✅";
+
+      const label = document.createElement("span");
+      label.className = "sge-affaires-empty-text";
+      label.textContent = "Aucune affaire Enedis en cours sur ce PRM";
+
+      emptyRow.appendChild(icon);
+      emptyRow.appendChild(label);
+      affairesBox.appendChild(emptyRow);
+      return;
+    }
+
+    const enCoursList = affaires.filter(a => a.isEnCours);
+    const termineesList = affaires.filter(a => !a.isEnCours);
+
+    affairesBox.classList.remove("hidden");
+
+    // En-tête de la boîte d'affaires
+    const sectionHeader = document.createElement("div");
+    sectionHeader.className = "sge-affaires-header";
+
+    const headerLeft = document.createElement("div");
+    headerLeft.className = "sge-affaires-title-group";
+
+    const titleIcon = document.createElement("span");
+    titleIcon.textContent = "📋";
+    titleIcon.className = "sge-icon";
+
+    const title = document.createElement("div");
+    title.className = "sge-affaires-title";
+    title.textContent = enCoursList.length > 0
+      ? `Affaires Enedis en cours (${enCoursList.length})`
+      : "Affaires Enedis";
+
+    headerLeft.appendChild(titleIcon);
+    headerLeft.appendChild(title);
+
+    const badgeCount = document.createElement("span");
+    if (enCoursList.length > 0) {
+      badgeCount.className = "badge badge-warning sge-pulse";
+      badgeCount.textContent = `${enCoursList.length} en cours`;
+    } else {
+      badgeCount.className = "badge badge-success";
+      badgeCount.textContent = "0 en cours";
+    }
+
+    sectionHeader.appendChild(headerLeft);
+    sectionHeader.appendChild(badgeCount);
+    affairesBox.appendChild(sectionHeader);
+
+    // Message informatif si aucune affaire active mais des affaires terminées
+    if (enCoursList.length === 0 && termineesList.length > 0) {
+      const noActiveNotice = document.createElement("div");
+      noActiveNotice.className = "sge-affaires-empty";
+
+      const checkIcon = document.createElement("span");
+      checkIcon.className = "sge-affaires-empty-icon";
+      checkIcon.textContent = "✅";
+
+      const checkText = document.createElement("span");
+      checkText.className = "sge-affaires-empty-text";
+      checkText.textContent = "Aucune affaire en cours actuellement sur ce PRM.";
+
+      noActiveNotice.appendChild(checkIcon);
+      noActiveNotice.appendChild(checkText);
+      affairesBox.appendChild(noActiveNotice);
+    }
+
+    // Afficher chaque affaire en cours
+    enCoursList.forEach((aff) => {
+      affairesBox.appendChild(createAffaireCard(aff, true));
+    });
+
+    // Affaires terminées (repliées dans un accordéon details)
+    if (termineesList.length > 0) {
+      const details = document.createElement("details");
+      details.className = "sge-affaires-details";
+
+      const summary = document.createElement("summary");
+      summary.className = "sge-affaires-summary";
+      summary.textContent = `Affaires passées / terminées (${termineesList.length})`;
+      details.appendChild(summary);
+
+      const termineesContainer = document.createElement("div");
+      termineesContainer.className = "sge-affaires-terminees-list";
+      termineesList.forEach((aff) => {
+        termineesContainer.appendChild(createAffaireCard(aff, false));
+      });
+      details.appendChild(termineesContainer);
+
+      affairesBox.appendChild(details);
+    }
+  }
+
+  /**
+   * Crée un élément DOM sécurisé représentant une affaire SGE
+   */
+  function createAffaireCard(aff, isEnCours) {
+    const card = document.createElement("div");
+    card.className = isEnCours ? "sge-affaire-card active" : "sge-affaire-card closed";
+
+    // 1. En-tête : Numéro d'affaire + bouton copier + statut + bouton ouvrir SGE
+    const cardHeader = document.createElement("div");
+    cardHeader.className = "sge-affaire-card-top";
+
+    const idGroup = document.createElement("div");
+    idGroup.className = "sge-affaire-id-group";
+
+    const idAffaireEl = document.createElement("span");
+    idAffaireEl.className = "sge-affaire-id mono";
+    idAffaireEl.textContent = aff.idAffaire || "-";
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "sge-affaire-copy-btn";
+    copyBtn.title = "Copier le numéro d'affaire";
+    copyBtn.textContent = "📋";
+    copyBtn.type = "button";
+    copyBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (aff.idAffaire && aff.idAffaire !== "-") {
+        navigator.clipboard.writeText(aff.idAffaire).then(() => {
+          showCopyFeedback("N° d'affaire copié !");
+        });
+      }
+    });
+
+    idGroup.appendChild(idAffaireEl);
+    idGroup.appendChild(copyBtn);
+
+    const actionsRight = document.createElement("div");
+    actionsRight.className = "sge-affaire-actions-right";
+
+    const statutBadge = document.createElement("span");
+    statutBadge.className = isEnCours ? "badge badge-warning" : "badge badge-secondary";
+    statutBadge.textContent = aff.statutLibelle || (isEnCours ? "En cours" : "Terminée");
+    actionsRight.appendChild(statutBadge);
+
+    if (aff.urlSge) {
+      const openLink = document.createElement("a");
+      openLink.className = "sge-affaire-link-btn";
+      openLink.href = aff.urlSge;
+      openLink.target = "_blank";
+      openLink.rel = "noopener noreferrer";
+      openLink.textContent = "Ouvrir SGE ↗";
+      openLink.title = `Consulter l'affaire ${aff.idAffaire} dans SGE`;
+      openLink.addEventListener("click", (e) => {
+        e.preventDefault();
+        chrome.tabs.create({ url: aff.urlSge });
+      });
+      actionsRight.appendChild(openLink);
+    }
+
+    cardHeader.appendChild(idGroup);
+    cardHeader.appendChild(actionsRight);
+    card.appendChild(cardHeader);
+
+    // 2. Type de prestation / demande et jalon
+    const typeRow = document.createElement("div");
+    typeRow.className = "sge-affaire-type-row";
+
+    const typeBadge = document.createElement("span");
+    typeBadge.className = "sge-affaire-type-badge";
+    typeBadge.textContent = aff.sousTypeDemande || aff.prestationLibelle || "Demande";
+    typeRow.appendChild(typeBadge);
+
+    if (aff.dernierJalon) {
+      const jalonBadge = document.createElement("span");
+      jalonBadge.className = "sge-affaire-jalon-badge";
+      jalonBadge.textContent = `📍 ${aff.dernierJalon.libelle}${aff.dernierJalon.date && aff.dernierJalon.date !== "-" ? ` (${aff.dernierJalon.date})` : ""}`;
+      typeRow.appendChild(jalonBadge);
+    }
+
+    card.appendChild(typeRow);
+
+    // 3. Grille des informations clés
+    const grid = document.createElement("div");
+    grid.className = "sge-affaire-grid";
+
+    if (aff.dateDemande && aff.dateDemande !== "-") {
+      grid.appendChild(createAffaireItem("Date demande", aff.dateDemande));
+    }
+    if (aff.dateEffetSouhaitee && aff.dateEffetSouhaitee !== "-") {
+      grid.appendChild(createAffaireItem("Effet souhaité", aff.dateEffetSouhaitee));
+    }
+    if (aff.refDemandeur) {
+      grid.appendChild(createAffaireItem("Réf. demandeur", aff.refDemandeur, "highlight-cyan"));
+    }
+    if (aff.initiateur) {
+      grid.appendChild(createAffaireItem("Initiateur", aff.initiateur));
+    }
+
+    if (grid.children.length > 0) {
+      card.appendChild(grid);
+    }
+
+    // 4. Encart RDV / Intervention planifiée (si présent)
+    if (aff.rdvInfo && (aff.rdvInfo.datePrevue || aff.rdvInfo.creneauHoraire)) {
+      const rdvBox = document.createElement("div");
+      rdvBox.className = "sge-affaire-rdv-box";
+
+      const rdvHeader = document.createElement("div");
+      rdvHeader.className = "sge-affaire-rdv-header";
+
+      const rdvTag = document.createElement("span");
+      rdvTag.className = "sge-affaire-rdv-tag";
+      rdvTag.textContent = "🗓️ Intervention Enedis planifiée";
+      rdvHeader.appendChild(rdvTag);
+
+      if (aff.rdvInfo.modeRealisation) {
+        const modeBadge = document.createElement("span");
+        modeBadge.className = "badge badge-info";
+        modeBadge.textContent = aff.rdvInfo.modeRealisation;
+        rdvHeader.appendChild(modeBadge);
+      }
+      rdvBox.appendChild(rdvHeader);
+
+      const rdvGrid = document.createElement("div");
+      rdvGrid.className = "sge-affaire-rdv-grid";
+
+      if (aff.rdvInfo.datePrevue && aff.rdvInfo.datePrevue !== "-") {
+        rdvGrid.appendChild(createAffaireItem("Date prévue", aff.rdvInfo.datePrevue, "highlight-cyan"));
+      }
+      if (aff.rdvInfo.creneauHoraire && aff.rdvInfo.creneauHoraire !== "-") {
+        rdvGrid.appendChild(createAffaireItem("Créneau horaire", aff.rdvInfo.creneauHoraire, "highlight-pink"));
+      }
+      if (aff.presenceClient) {
+        rdvGrid.appendChild(createAffaireItem("Présence client", aff.presenceClient));
+      }
+      if (aff.operations) {
+        const opItem = createAffaireItem("Opérations", aff.operations);
+        opItem.classList.add("sge-affaire-item-full");
+        rdvGrid.appendChild(opItem);
+      }
+
+      rdvBox.appendChild(rdvGrid);
+      card.appendChild(rdvBox);
+    }
+
+    // 5. Commentaire de la demande
+    if (aff.commentaire) {
+      const commentBox = document.createElement("div");
+      commentBox.className = "sge-affaire-comment-box";
+
+      const commentHeader = document.createElement("div");
+      commentHeader.className = "sge-affaire-comment-header";
+      commentHeader.textContent = "💬 Commentaire de la demande :";
+
+      const commentText = document.createElement("div");
+      commentText.className = "sge-affaire-comment-text";
+      commentText.textContent = aff.commentaire;
+
+      commentBox.appendChild(commentHeader);
+      commentBox.appendChild(commentText);
+      card.appendChild(commentBox);
+    }
+
+    return card;
+  }
+
+  /**
+   * Crée un élément clé-valeur sécurisé pour une affaire
+   */
+  function createAffaireItem(label, value, valueClass = "") {
+    const item = document.createElement("div");
+    item.className = "sge-affaire-item";
+
+    const labelEl = document.createElement("span");
+    labelEl.className = "sge-affaire-label";
+    labelEl.textContent = label;
+
+    const valEl = document.createElement("span");
+    valEl.className = "sge-affaire-value" + (valueClass ? ` ${valueClass}` : "");
+    valEl.textContent = value || "-";
+
+    item.appendChild(labelEl);
+    item.appendChild(valEl);
+    return item;
   }
 
   // Copie du diagnostic en cliquant sur le tiret du prix du kWh s'il est indisponible
@@ -1688,6 +1993,29 @@ document.addEventListener("DOMContentLoaded", () => {
       if (sge.puissanceCoupureFormate) sgeLines.push(`• Puissance de coupure : ${sge.puissanceCoupureFormate}`);
       if (sge.calendrierFournisseur) sgeLines.push(`• Calendrier fournisseur : ${sge.calendrierFournisseur}`);
       if (sge.formuleTarifaire) sgeLines.push(`• Formule tarifaire : ${sge.formuleTarifaire}${sge.formuleTarifaireCode ? ` (${sge.formuleTarifaireCode})` : ""}`);
+
+      // Affaires SGE
+      if (Array.isArray(sge.affaires) && sge.affaires.length > 0) {
+        const enCours = sge.affaires.filter(a => a.isEnCours);
+        if (enCours.length > 0) {
+          sgeLines.push(`\n📋 AFFAIRES SGE EN COURS (${enCours.length})`);
+          enCours.forEach((aff, idx) => {
+            sgeLines.push(`• Affaire n°${idx + 1} : ${aff.idAffaire} [${aff.statutLibelle}] - ${aff.sousTypeDemande}`);
+            if (aff.dernierJalon) sgeLines.push(`  - Dernier jalon : ${aff.dernierJalon.libelle}${aff.dernierJalon.date && aff.dernierJalon.date !== "-" ? ` (${aff.dernierJalon.date})` : ""}`);
+            if (aff.rdvInfo && aff.rdvInfo.datePrevue && aff.rdvInfo.datePrevue !== "-") {
+              sgeLines.push(`  - Intervention planifiée : ${aff.rdvInfo.datePrevue}${aff.rdvInfo.creneauHoraire && aff.rdvInfo.creneauHoraire !== "-" ? ` [${aff.rdvInfo.creneauHoraire}]` : ""}`);
+            }
+            if (aff.presenceClient) sgeLines.push(`  - Présence client : ${aff.presenceClient}`);
+            if (aff.operations) sgeLines.push(`  - Opérations : ${aff.operations}`);
+            if (aff.commentaire) sgeLines.push(`  - Commentaire : "${aff.commentaire}"`);
+            if (aff.refDemandeur) sgeLines.push(`  - Réf demandeur : ${aff.refDemandeur}`);
+            if (aff.initiateur) sgeLines.push(`  - Initiateur : ${aff.initiateur}`);
+            if (aff.urlSge) sgeLines.push(`  - Lien direct SGE : ${aff.urlSge}`);
+          });
+        } else {
+          sgeLines.push(`• Affaires SGE en cours : Aucune`);
+        }
+      }
     }
 
     const summaryText = [
