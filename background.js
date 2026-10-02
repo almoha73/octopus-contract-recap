@@ -3626,6 +3626,19 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
       if (compteur.intensiteNominale) {
         result.intensiteNominale = compteur.intensiteNominale.libelle || compteur.intensiteNominale.code || "-";
       }
+
+      // TIC (Télé-Information Client)
+      const ticInfo = compteur.teleinformationClient || compteur.teleinformation || compteur.tic || null;
+      if (ticInfo) {
+        // Est-ce que c'est un booléen ou un objet avec { code: "OUI" } ?
+        const isActive = ticInfo.active === true || String(ticInfo.active?.code).toUpperCase() === "OUI" || String(ticInfo.active).toUpperCase() === "OUI" || ticInfo.etat?.code === "ACTIF";
+        const isActivable = ticInfo.activable === true || String(ticInfo.activable?.code).toUpperCase() === "OUI" || String(ticInfo.activable).toUpperCase() === "OUI";
+        const mode = (ticInfo.mode?.code || ticInfo.mode || "").toUpperCase();
+
+        result.ticActivee = isActive ? "Oui" : "Non";
+        result.ticStandard = mode.includes("STANDARD") ? "Oui" : (mode.includes("HISTO") ? "Non (Historique)" : "Non");
+        result.ticActivable = isActivable ? "Oui" : "Non";
+      }
     }
 
     // Disjoncteur

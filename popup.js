@@ -155,6 +155,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const sgeNbFils = document.getElementById("sgeNbFils");
   const sgeTensionCompteur = document.getElementById("sgeTensionCompteur");
   const sgeIntensiteNominale = document.getElementById("sgeIntensiteNominale");
+  const sgeTicActivee = document.getElementById("sgeTicActivee");
+  const sgeTicStandard = document.getElementById("sgeTicStandard");
+  const sgeTicActivable = document.getElementById("sgeTicActivable");
   const sgePeriodicite = document.getElementById("sgePeriodicite");
   const sgeHcRow = document.getElementById("sgeHcRow");
   const sgePlagesHc = document.getElementById("sgePlagesHc");
@@ -1560,6 +1563,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (sgeNbFils) sgeNbFils.textContent = sge.nbFilsLabel || "-";
       if (sgeTensionCompteur) sgeTensionCompteur.textContent = sge.tensionCompteur || "-";
       if (sgeIntensiteNominale) sgeIntensiteNominale.textContent = sge.intensiteNominale || "-";
+      if (sgeTicActivee) sgeTicActivee.textContent = sge.ticActivee || "-";
+      if (sgeTicStandard) sgeTicStandard.textContent = sge.ticStandard || "-";
+      if (sgeTicActivable) sgeTicActivable.textContent = sge.ticActivable || "-";
 
       // Relevé & HC
       if (sgePeriodicite) sgePeriodicite.textContent = sge.periodiciteReleve || "-";
