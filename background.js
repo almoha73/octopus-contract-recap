@@ -3719,11 +3719,14 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
         d.demande?.demandeDiverse?.typeDemandeDiverse?.sousTypeDemande?.code ||
         "";
 
-      // Prestation principale
+      // Prestation principale et Option
       let prestationLibelle = null;
       if (Array.isArray(d.demande?.prestations) && d.demande.prestations.length > 0) {
         const p0 = d.demande.prestations[0];
         prestationLibelle = p0.fiche?.libelle ? `${p0.fiche.libelle}${p0.fiche.code ? ` (${p0.fiche.code})` : ""}` : null;
+        if (prestationLibelle && p0.option?.libelle) {
+          prestationLibelle += ` — ${p0.option.libelle}`;
+        }
       } else if (d.demande?.prestation?.ficheCode) {
         prestationLibelle = d.demande.prestation.ficheCode;
       }
