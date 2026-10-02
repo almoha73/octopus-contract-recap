@@ -3241,8 +3241,8 @@ async function handleFetchSgeData(payload) {
 
   const prmStr = String(prm);
 
-  // 1. Vérifier le cache local SGE (30 min de validité) - DÉSACTIVÉ TEMPORAIREMENT POUR TEST
-  if (false && !bypassCache) {
+  // 1. Vérifier le cache local SGE (30 min de validité)
+  if (!bypassCache) {
     try {
       const cacheKey = `sge_cache_${prmStr}`;
       const stored = await chrome.storage.local.get([cacheKey]);
