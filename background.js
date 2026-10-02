@@ -3709,20 +3709,23 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
       const sousTypeDemande = aff.demande?.sousTypeDemande ||
         d.demande?.demandeTechnique?.type?.libelle ||
         d.demande?.prestations?.[0]?.fiche?.libelle ||
+        d.prestations?.[0]?.fiche?.libelle ||
         d.typeDemandeDiverse?.sousTypeDemande?.libelle ||
         d.demande?.demandeDiverse?.typeDemandeDiverse?.sousTypeDemande?.libelle ||
         "Demande";
       const sousTypeDemandeCode = aff.demande?.sousTypeDemandeCode ||
         d.demande?.demandeTechnique?.type?.code ||
         d.demande?.prestations?.[0]?.fiche?.code ||
+        d.prestations?.[0]?.fiche?.code ||
         d.typeDemandeDiverse?.sousTypeDemande?.code ||
         d.demande?.demandeDiverse?.typeDemandeDiverse?.sousTypeDemande?.code ||
         "";
 
       // Prestation principale et Option
       let prestationLibelle = null;
-      if (Array.isArray(d.demande?.prestations) && d.demande.prestations.length > 0) {
-        const p0 = d.demande.prestations[0];
+      const prestationsArray = Array.isArray(d.demande?.prestations) ? d.demande.prestations : (Array.isArray(d.prestations) ? d.prestations : []);
+      if (prestationsArray.length > 0) {
+        const p0 = prestationsArray[0];
         prestationLibelle = p0.fiche?.libelle ? `${p0.fiche.libelle}${p0.fiche.code ? ` (${p0.fiche.code})` : ""}` : null;
         if (prestationLibelle && p0.option?.libelle) {
           prestationLibelle += ` — ${p0.option.libelle}`;
