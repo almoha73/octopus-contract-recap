@@ -1774,7 +1774,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const typeBadge = document.createElement("span");
     typeBadge.className = "sge-affaire-type-badge";
-    typeBadge.textContent = aff.sousTypeDemande || aff.prestationLibelle || "Demande";
+    typeBadge.textContent = aff.prestationLibelle || aff.sousTypeDemande || "Demande";
     typeRow.appendChild(typeBadge);
 
     if (aff.dernierJalon) {
