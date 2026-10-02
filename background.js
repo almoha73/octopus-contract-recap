@@ -3759,14 +3759,26 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
         }
       }
 
-      // Commentaire intervention (chercher dans interventions ou demande)
-      let commentaire = d.demande?.commentaireIntervention || null;
+      // Commentaire intervention ou demande (chercher dans interventions ou demande)
+      let commentaire = d.demande?.commentaireIntervention || 
+                        d.demande?.commentaire || 
+                        d.demande?.commentaireClient ||
+                        d.demande?.observations ||
+                        d.demande?.demandeTechnique?.commentaire ||
+                        d.demande?.demandeTechnique?.observations ||
+                        (Array.isArray(d.demande?.prestations) && d.demande.prestations.length > 0 ? d.demande.prestations[0].commentaire : null) ||
+                        null;
+                        
       if (!commentaire && Array.isArray(d.interventions)) {
         for (const it of d.interventions) {
           if (Array.isArray(it.demandesInterventions)) {
             for (const di of it.demandesInterventions) {
               if (di.commentaireIntervention && di.commentaireIntervention.trim()) {
                 commentaire = di.commentaireIntervention.trim();
+                break;
+              }
+              if (di.commentaire && di.commentaire.trim()) {
+                commentaire = di.commentaire.trim();
                 break;
               }
             }
