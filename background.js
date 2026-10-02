@@ -3628,30 +3628,47 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
       }
     }
 
-    // Recherche récursive robuste pour la TIC (Télé-Information Client)
-    let ticInfo = null;
-    function findTic(obj) {
-      if (!obj || typeof obj !== 'object') return null;
-      if (obj.teleinformationClient) return obj.teleinformationClient;
-      if (obj.teleinformation) return obj.teleinformation;
-      if (obj.tic) return obj.tic;
-      for (const key of Object.keys(obj)) {
-        const found = findTic(obj[key]);
-        if (found) return found;
+    // Extraction TIC
+    // Les données TIC sont souvent retournées directement à la racine du compteur sous forme de booléens (API prm/situation-comptage)
+    if (comptage.compteurs && comptage.compteurs.length > 0) {
+      const compteur = comptage.compteurs[0];
+      if (compteur.ticActivee !== undefined) {
+        result.ticActivee = compteur.ticActivee ? "Oui" : "Non";
       }
-      return null;
+      if (compteur.ticStandard !== undefined) {
+        result.ticStandard = compteur.ticStandard ? "Oui" : "Non (Historique)";
+      }
+      if (compteur.ticActivable !== undefined) {
+        result.ticActivable = compteur.ticActivable ? "Oui" : "Non";
+      }
     }
-    
-    ticInfo = findTic(comptage);
 
-    if (ticInfo) {
-      const isActive = ticInfo.active === true || String(ticInfo.active?.code).toUpperCase() === "OUI" || String(ticInfo.active).toUpperCase() === "OUI" || ticInfo.etat?.code === "ACTIF";
-      const isActivable = ticInfo.activable === true || String(ticInfo.activable?.code).toUpperCase() === "OUI" || String(ticInfo.activable).toUpperCase() === "OUI";
-      const mode = (ticInfo.mode?.code || ticInfo.mode || "").toUpperCase();
+    // Recherche récursive robuste pour la TIC (Fallback si jamais c'est un objet imbriqué sur d'autres requêtes)
+    if (!result.ticActivee && !result.ticStandard) {
+      let ticInfo = null;
+      function findTic(obj) {
+        if (!obj || typeof obj !== 'object') return null;
+        if (obj.teleinformationClient) return obj.teleinformationClient;
+        if (obj.teleinformation) return obj.teleinformation;
+        if (obj.tic && typeof obj.tic === 'object') return obj.tic;
+        for (const key of Object.keys(obj)) {
+          const found = findTic(obj[key]);
+          if (found) return found;
+        }
+        return null;
+      }
+      
+      ticInfo = findTic(comptage);
 
-      result.ticActivee = isActive ? "Oui" : "Non";
-      result.ticStandard = mode.includes("STANDARD") ? "Oui" : (mode.includes("HISTO") ? "Non (Historique)" : "Non");
-      result.ticActivable = isActivable ? "Oui" : "Non";
+      if (ticInfo) {
+        const isActive = ticInfo.active === true || String(ticInfo.active?.code).toUpperCase() === "OUI" || String(ticInfo.active).toUpperCase() === "OUI" || ticInfo.etat?.code === "ACTIF";
+        const isActivable = ticInfo.activable === true || String(ticInfo.activable?.code).toUpperCase() === "OUI" || String(ticInfo.activable).toUpperCase() === "OUI";
+        const mode = (ticInfo.mode?.code || ticInfo.mode || "").toUpperCase();
+
+        result.ticActivee = isActive ? "Oui" : "Non";
+        result.ticStandard = mode.includes("STANDARD") ? "Oui" : (mode.includes("HISTO") ? "Non (Historique)" : "Non");
+        result.ticActivable = isActivable ? "Oui" : "Non";
+      }
     }
 
     // Disjoncteur
