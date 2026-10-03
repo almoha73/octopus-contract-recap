@@ -3252,7 +3252,7 @@ async function handleFetchSgeData(payload) {
   // 1. Vérifier le cache local SGE (30 min de validité)
   if (!bypassCache) {
     try {
-      const cacheKey = `sge_cache_${prmStr}`;
+      const cacheKey = `sge_cache_v2_${prmStr}`;
       const stored = await chrome.storage.local.get([cacheKey]);
       const item = stored[cacheKey];
       if (item && item.data && item.data.affaires !== undefined && (Date.now() - (item.cachedAt || 0)) < SGE_CACHE_TTL_MS) {
@@ -3313,7 +3313,8 @@ async function handleFetchSgeData(payload) {
             method: "POST",
             credentials: "include",
             headers: { 
-              "Accept": "application/json",
+              // Même version d'API que le portail SGE (la v1 renvoie un périmètre différent)
+              "Accept": "application/vnd.enedis.r2da.api.v2+json",
               "Content-Type": "application/json"
             },
             body: JSON.stringify(body)
@@ -3330,18 +3331,51 @@ async function handleFetchSgeData(payload) {
           fetchPrm("situation-alimentation").catch(e => ({ error: e.message })),
           fetchPrm("situation-comptage").catch(e => ({ error: e.message })),
           fetchPrm("situations-contractuelles").catch(e => ({ error: e.message })),
-          fetchPost(`https://mfa.microapps.enedis.fr/r2da/api/dossiers/_recherche?page=0&sort=desc&limit=20`, { idPrm: [prmId], text: prmId }).catch(e => ({ error: e.message }))
-        ]).then(async ([alimentation, comptage, contractuel, affairesRaw]) => {
+          (async () => {
+            const PAGE_SIZE = 20;
+            const MAX_PAGES = 5;
+            const all = [];
+            let totalAnnonce = 0;
+            let pageFailed = false;
+            const diagPages = [];
+            const seen = new Set();
+            for (let page = 0; page < MAX_PAGES; page++) {
+              let data = null;
+              let lastErr = "";
+              // Jusqu'à 3 tentatives par page (erreurs Enedis intermittentes)
+              for (let attempt = 0; attempt < 3 && !data; attempt++) {
+                try {
+                  data = await fetchPost(`https://mfa.microapps.enedis.fr/r2da/api/dossiers/_recherche?page=${page}&sort=desc&limit=${PAGE_SIZE}`, { idPrm: [prmId], text: prmId });
+                } catch (e) {
+                  lastErr = e && e.message ? e.message : String(e);
+                  await new Promise(r => setTimeout(r, 300));
+                }
+              }
+              if (!data) pageFailed = true;
+              diagPages.push({ page, count: data && Array.isArray(data.dossierDTO) ? data.dossierDTO.length : 0, total: data ? data.nombreResultatTotal : null, error: data ? "" : lastErr });
+              const list = data && Array.isArray(data.dossierDTO) ? data.dossierDTO : [];
+              if (data && Number.isFinite(data.nombreResultatTotal)) totalAnnonce = data.nombreResultatTotal;
+              for (const d of list) {
+                const key = String(d.idAffaire) + "|" + String(d.applicationSource || "");
+                if (!seen.has(key)) { seen.add(key); all.push(d); }
+              }
+              if (list.length < PAGE_SIZE) break;
+            }
+            return { all, incomplete: pageFailed || (totalAnnonce > 0 ? all.length < totalAnnonce : false), total: totalAnnonce, pages: diagPages };
+          })().catch(() => ({ all: [], incomplete: true }))
+        ]).then(async ([alimentation, comptage, contractuel, searchRes]) => {
           let affairesList = [];
-          if (affairesRaw && !affairesRaw.error) {
-            const dossiers = Array.isArray(affairesRaw.dossierDTO) ? affairesRaw.dossierDTO : [];
+          
+          let dossiers = searchRes.all;
+
+          if (dossiers.length > 0) {
             const affairesWithDetails = await Promise.all(
               dossiers.map(async (dossier) => {
                 const statutStr = String(typeof dossier.statut === "string" ? dossier.statut : (dossier.statut?.code || "")).toUpperCase();
                 const isEnCours = statutStr === "COURS";
                 let detail = null;
-                // Récupérer le détail pour les affaires en cours, et jusqu'à 10 affaires closes (pour avoir le détail dans l'historique sans surcharger l'API)
-                if (isEnCours || dossiers.indexOf(dossier) < 10) {
+                // Récupérer le détail pour les affaires en cours, et jusqu'à 20 affaires closes
+                if (isEnCours || dossiers.indexOf(dossier) < 20) {
                   try {
                     const app = (dossier.applicationSource ? String(dossier.applicationSource).toLowerCase() : "adc5");
                     detail = await fetchUrl(`https://mfa.microapps.enedis.fr/${app}/api/affaires/${dossier.idAffaire}`);
@@ -3363,6 +3397,8 @@ async function handleFetchSgeData(payload) {
             comptage,
             contractuel,
             affaires: affairesList,
+            affairesIncomplete: !!searchRes.incomplete,
+            affairesDiag: { total: searchRes.total || 0, received: searchRes.all.length, pages: searchRes.pages || [] },
             done: true
           };
 
@@ -3393,7 +3429,7 @@ async function handleFetchSgeData(payload) {
 
   // 4. Attendre le résultat dans le DOM de l'onglet SGE (polling max 10s)
   let rawResult = null;
-  const maxWaitMs = 10000;
+  const maxWaitMs = 20000;
   const pollIntervalMs = 250;
   const startPoll = Date.now();
 
@@ -3455,9 +3491,11 @@ async function handleFetchSgeData(payload) {
     rawResult.affaires
   );
 
-  if (formatted.hasData) {
+  formatted.affairesDiag = rawResult.affairesDiag || null;
+
+  if (formatted.hasData && !rawResult.affairesIncomplete) {
     try {
-      const cacheKey = `sge_cache_${prmStr}`;
+      const cacheKey = `sge_cache_v2_${prmStr}`;
       await chrome.storage.local.set({
         [cacheKey]: {
           prm: prmStr,
@@ -3774,6 +3812,9 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
 
       // Type de demande & sous-type
       const sousTypeDemande = aff.demande?.sousTypeDemande ||
+        aff.demande?.prestation?.libelle ||
+        aff.typeDemande?.libelle || aff.typeDemande ||
+        aff.libelle ||
         d.demande?.demandeTechnique?.type?.libelle ||
         d.demande?.prestations?.[0]?.fiche?.libelle ||
         d.prestations?.[0]?.fiche?.libelle ||
@@ -3781,6 +3822,8 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
         d.demande?.demandeDiverse?.typeDemandeDiverse?.sousTypeDemande?.libelle ||
         "Demande";
       const sousTypeDemandeCode = aff.demande?.sousTypeDemandeCode ||
+        aff.demande?.prestation?.code ||
+        aff.typeDemande?.code ||
         d.demande?.demandeTechnique?.type?.code ||
         d.demande?.prestations?.[0]?.fiche?.code ||
         d.prestations?.[0]?.fiche?.code ||
@@ -3799,18 +3842,22 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
         }
       } else if (d.demande?.prestation?.ficheCode) {
         prestationLibelle = d.demande.prestation.ficheCode;
+      } else if (aff.demande?.prestation?.libelle) {
+        prestationLibelle = `${aff.demande.prestation.libelle}${aff.demande.prestation.code ? ` (${aff.demande.prestation.code})` : ""}`;
+      } else if (aff.prestation?.libelle || aff.prestation) {
+        prestationLibelle = aff.prestation.libelle || aff.prestation;
       }
 
       // Dates
-      const dateDemande = d.demande?.dateHeure || d.demande?.dateCreationDemande || d.demande?.dateTechCreation || null;
+      const dateDemande = d.demande?.dateHeure || d.demande?.dateCreationDemande || d.demande?.dateTechCreation || aff.demande?.dateCreation || aff.dateCreation || aff.dateHeure || aff.date || null;
       const dateDemandeFormatee = formatSgeFrenchDate(dateDemande);
-      const dateEffetSouhaitee = d.demande?.dateEffetSouhaitee || null;
+      const dateEffetSouhaitee = d.demande?.dateEffetSouhaitee || aff.dateEffetSouhaitee || null;
       const dateEffetSouhaiteeFormatee = formatSgeFrenchDate(dateEffetSouhaitee);
 
       // Référence demandeur & Initiateur
       const refDemandeur = d.demande?.referenceDemandeur || null;
       let initiateurNom = null;
-      const init = d.demande?.initiateur || d.initiateur;
+      const init = d.demande?.initiateur || d.initiateur || aff.demande?.initiateur;
       if (init) {
         const civilite = init.identite?.civilite || init.personne?.personnePhysique?.civilite || "";
         const prenom = init.identite?.prenom || init.personne?.personnePhysique?.prenom || "";
@@ -3945,15 +3992,69 @@ function formatSgeData(alimentation, comptage, contractuel, prm, affairesRawList
         presenceClient = d.recevabilite.presenceClientObligatoire ? "Oui (Obligatoire)" : "Non (Pas nécessaire)";
       }
 
+      // Bilan / Etat de réalisation
+      let etatRealisation = null;
+      if (prestationsArray.length > 0 && prestationsArray[0].bilan?.etatRealisation?.libelle) {
+        etatRealisation = prestationsArray[0].bilan.etatRealisation.libelle;
+      } else if (prestationsArray.length > 0 && prestationsArray[0].etat?.libelle) {
+        etatRealisation = prestationsArray[0].etat.libelle;
+      } else if (d.demande?.bilan?.etatRealisation?.libelle) {
+        etatRealisation = d.demande.bilan.etatRealisation.libelle;
+      } else if (d.demande?.demandeDiverse?.bilan?.etatRealisation?.libelle) {
+        etatRealisation = d.demande.demandeDiverse.bilan.etatRealisation.libelle;
+      } else if (d.demande?.demandeDiverse?.etat?.libelle) {
+        etatRealisation = d.demande.demandeDiverse.etat.libelle;
+      } else if (d.demande?.etat?.libelle) {
+        etatRealisation = d.demande.etat.libelle;
+      }
+      
+      if (!etatRealisation && Array.isArray(d.interventions)) {
+        for (let i = d.interventions.length - 1; i >= 0; i--) {
+          const it = d.interventions[i];
+          if (it.bilan?.etatRealisation?.libelle) {
+            etatRealisation = it.bilan.etatRealisation.libelle;
+            break;
+          } else if (it.etatIntervention?.libelle) {
+            etatRealisation = it.etatIntervention.libelle;
+            break;
+          } else if (it.etat?.libelle) {
+            etatRealisation = it.etat.libelle;
+            break;
+          }
+        }
+      }
+
+      // Analyse des requêtes critiques (F200 / Résiliation à l'initiative du fournisseur)
+      const typeDesc = [sousTypeDemande, sousTypeDemandeCode, prestationLibelle].join(" ").toUpperCase();
+      const isF200 = typeDesc.includes("F200");
+      const isResiliation = typeDesc.includes("RÉSILIATION") || typeDesc.includes("RESILIATION");
+      let isFournisseurInitiated = false;
+      if (init) {
+        const acteurStr = (init.acteurAppartenance?.libelle || init.acteurAppartenance?.code || init.codeACM?.libelle || init.codeACM?.code || "").toUpperCase();
+        const roleStr = (init.typeActeur?.libelle || init.typeActeur?.code || init.role?.libelle || init.role?.code || "").toUpperCase();
+        if (acteurStr.includes("FOURNISSEUR") || roleStr.includes("FOURNISSEUR") || acteurStr === "F" || roleStr === "F") {
+          isFournisseurInitiated = true;
+        } else if (initiateurNom && initiateurNom.toUpperCase().includes("FOURNISSEUR")) {
+          isFournisseurInitiated = true;
+        } else if (!acteurStr && !roleStr && initiateurNom && ["OCTOPUS", "PLUM", "PLÜM", "EDF", "ENGIE", "TOTAL", "ENI", "EKWATEUR"].some(f => initiateurNom.toUpperCase().includes(f))) {
+          // Fallback on common supplier names if role isn't explicitly 'Fournisseur'
+          isFournisseurInitiated = true;
+        }
+      }
+
       return {
         idAffaire,
         urlSge,
         isEnCours,
         statutCode: rawStatut,
         statutLibelle,
+        etatRealisation,
         sousTypeDemande,
         sousTypeDemandeCode,
         prestationLibelle,
+        isF200,
+        isResiliation,
+        isFournisseurInitiated,
         dateDemande: dateDemandeFormatee,
         dateEffetSouhaitee: dateEffetSouhaiteeFormatee,
         refDemandeur,

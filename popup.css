@@ -1919,3 +1919,21 @@ body.mode-fullscreen #fullscreenBtn {
   color: #fb923c;
   border: 1px solid rgba(249, 115, 22, 0.3);
 }
+
+/* Alert Banner */
+.alert-banner {
+  margin: 10px 15px;
+  padding: 12px 15px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.alert-banner.danger-banner {
+  background-color: #fff1f0;
+  border: 1px solid #ffa39e;
+  color: #cf1322;
+}
+

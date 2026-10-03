@@ -1599,11 +1599,52 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function checkSupplierAlerts(affaires) {
+    // Supprimer l'alerte existante s'il y en a une
+    const existingAlert = document.getElementById("fournisseur-alert-banner");
+    if (existingAlert) {
+      existingAlert.remove();
+    }
+
+    if (!Array.isArray(affaires)) return;
+
+    const alerts = [];
+    affaires.forEach(aff => {
+      if (aff.isFournisseurInitiated) {
+        if (aff.isF200) {
+          alerts.push(`Limitation F200 (${aff.idAffaire})`);
+        }
+        if (aff.isResiliation) {
+          alerts.push(`Résiliation (${aff.idAffaire})`);
+        }
+      }
+    });
+
+    if (alerts.length > 0) {
+      const appContainer = document.querySelector(".app-container");
+      if (appContainer) {
+        const banner = document.createElement("div");
+        banner.id = "fournisseur-alert-banner";
+        banner.className = "alert-banner danger-banner";
+        banner.innerHTML = `<strong>⚠️ Attention :</strong> Action(s) à l'initiative du fournisseur détectée(s) : ${alerts.join(", ")}`;
+        
+        const header = appContainer.querySelector(".app-header");
+        if (header && header.nextSibling) {
+          appContainer.insertBefore(banner, header.nextSibling);
+        } else {
+          appContainer.prepend(banner);
+        }
+      }
+    }
+  }
+
   /**
    * Construit et affiche l'encart Affaires SGE Enedis de manière 100% sécurisée
    */
   function renderSgeAffaires(affairesBox, affaires) {
     if (!affairesBox) return;
+
+    checkSupplierAlerts(affaires);
 
     // Vider le conteneur en toute sécurité
     while (affairesBox.firstChild) {
@@ -1667,6 +1708,16 @@ document.addEventListener("DOMContentLoaded", () => {
     sectionHeader.appendChild(headerLeft);
     sectionHeader.appendChild(badgeCount);
     affairesBox.appendChild(sectionHeader);
+
+    // Avertissement uniquement si la liste Enedis est incomplète
+    const diag = currentSgeData && currentSgeData.affairesDiag;
+    const diagErrs = diag ? (diag.pages || []).filter(p => p.error).map(p => `p${p.page}: ${p.error}`) : [];
+    if (diag && (diag.received < diag.total || diagErrs.length > 0)) {
+      const diagLine = document.createElement("div");
+      diagLine.className = "sge-affaires-empty-text";
+      diagLine.textContent = `⚠️ Liste incomplète : ${diag.received} affaire(s) reçue(s) sur ${diag.total} annoncée(s)` + (diagErrs.length ? ` — erreurs ${diagErrs.join(", ")}` : "") + ". Cliquez sur Actualiser.";
+      affairesBox.appendChild(diagLine);
+    }
 
     // Message informatif si aucune affaire active mais des affaires terminées
     if (enCoursList.length === 0 && termineesList.length > 0) {
@@ -1752,7 +1803,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const statutBadge = document.createElement("span");
     statutBadge.className = isEnCours ? "badge badge-warning" : "badge badge-secondary";
-    statutBadge.textContent = aff.statutLibelle || (isEnCours ? "En cours" : "Terminée");
+    let statutText = aff.statutLibelle || (isEnCours ? "En cours" : "Terminée");
+    if (!isEnCours && aff.etatRealisation) {
+      statutText += ` (${aff.etatRealisation})`;
+    }
+    statutBadge.textContent = statutText;
     actionsRight.appendChild(statutBadge);
 
     if (aff.urlSge) {
