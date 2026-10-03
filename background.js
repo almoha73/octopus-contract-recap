@@ -1960,6 +1960,8 @@ async function fetchMeasurementsByProperty(propertyId, prmId, contract = null) {
   const allMonths = [moisEnCours, ...moisPrecedents].filter(Boolean);
   const totalKwh = Math.round(allMonths.reduce((sum, m) => sum + (m.kwh || 0), 0) * 100) / 100;
   const totalCost = Math.round(allMonths.reduce((sum, m) => sum + (m.costEur || 0), 0) * 100) / 100;
+  const totalHp = Math.round(allMonths.reduce((sum, m) => sum + (m.hpKwh || 0), 0) * 100) / 100;
+  const totalHc = Math.round(allMonths.reduce((sum, m) => sum + (m.hcKwh || 0), 0) * 100) / 100;
   const nbMonths = allMonths.length;
   const moyenneKwh = nbMonths > 0 ? Math.round((totalKwh / nbMonths) * 100) / 100 : 0;
   const moyenneCost = nbMonths > 0 && totalCost > 0 ? Math.round((totalCost / nbMonths) * 100) / 100 : null;
@@ -1974,6 +1976,8 @@ async function fetchMeasurementsByProperty(propertyId, prmId, contract = null) {
     derniereReleve: derniereReleve,
     totalMoisDisponibles: validMonths.length,
     totalKwh: totalKwh,
+    totalHp: totalHp,
+    totalHc: totalHc,
     totalKwhFormate: formatKwhValue(totalKwh),
     totalCostEur: totalCost > 0 ? totalCost : null,
     totalCostFormate: totalCost > 0 ? `${totalCost.toFixed(2).replace(".", ",")} €` : "-",
@@ -3070,6 +3074,8 @@ function aggregateReadingsByMonth(readingNodes, contract = null) {
   const allMonths = [moisEnCours, ...moisPrecedents].filter(Boolean);
   const totalKwh = Math.round(allMonths.reduce((sum, m) => sum + (m.kwh || 0), 0) * 100) / 100;
   const totalCost = Math.round(allMonths.reduce((sum, m) => sum + (m.costEur || 0), 0) * 100) / 100;
+  const totalHp = Math.round(allMonths.reduce((sum, m) => sum + (m.hpKwh || 0), 0) * 100) / 100;
+  const totalHc = Math.round(allMonths.reduce((sum, m) => sum + (m.hcKwh || 0), 0) * 100) / 100;
   const nbMonths = allMonths.length;
   const moyenneKwh = nbMonths > 0 ? Math.round((totalKwh / nbMonths) * 100) / 100 : 0;
   const moyenneCost = nbMonths > 0 && totalCost > 0 ? Math.round((totalCost / nbMonths) * 100) / 100 : null;
@@ -3082,6 +3088,8 @@ function aggregateReadingsByMonth(readingNodes, contract = null) {
     derniereReleve: derniereReleve,
     totalMoisDisponibles: items.length,
     totalKwh: totalKwh,
+    totalHp: totalHp,
+    totalHc: totalHc,
     totalKwhFormate: formatKwhValue(totalKwh),
     totalCostEur: totalCost > 0 ? totalCost : null,
     totalCostFormate: totalCost > 0 ? `${totalCost.toFixed(2).replace(".", ",")} €` : "-",

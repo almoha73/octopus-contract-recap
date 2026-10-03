@@ -1918,6 +1918,15 @@ document.addEventListener("DOMContentLoaded", () => {
   copySummaryBtn.addEventListener("click", () => {
     if (!currentContract) return;
 
+    function getHcRatioText(hp, hc) {
+      if (!hp || !hc) return "";
+      const total = hp + hc;
+      if (total === 0) return "";
+      const ratio = Math.round((hc / total) * 100);
+      const isRentable = ratio >= 30;
+      return `(Ratio HC : ${ratio}% ${isRentable ? "✅ Rentable" : "⚠️ Non rentable"})`;
+    }
+
     const consoLines = [];
     if (currentContract.consoMensuelle && currentContract.consoMensuelle.hasData) {
       const conso = currentContract.consoMensuelle;
@@ -1929,6 +1938,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const cur = conso.moisEnCours;
         const costStr = (cur.costFormate && cur.costFormate !== "-") ? ` (${cur.costFormate})` : "";
         consoLines.push(`• Mois en cours (${cur.label}) : ${cur.kwhFormate}${costStr}`);
+        if (cur.hpKwh && cur.hcKwh) {
+          consoLines.push(`  (HP : ${cur.hpKwh} kWh • HC : ${cur.hcKwh} kWh) ${getHcRatioText(cur.hpKwh, cur.hcKwh)}`);
+        }
         if (cur.costEnergyEur !== undefined && cur.costAboEur !== undefined && cur.costAboEur > 0) {
           consoLines.push(`  (Énergie : ${cur.costEnergyEur.toFixed(2).replace(".", ",")} € • Abonnement : ${cur.costAboEur.toFixed(2).replace(".", ",")} €)`);
         }
@@ -1936,7 +1948,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (conso.moisPrecedents?.length > 0) {
         const prec = conso.moisPrecedents.map(p => {
           const costStr = (p.costFormate && p.costFormate !== "-") ? ` (${p.costFormate})` : "";
-          return `  - ${p.label} : ${p.kwhFormate}${costStr}`;
+          const hcTxt = (p.hpKwh && p.hcKwh) ? ` [HP:${p.hpKwh} HC:${p.hcKwh} ${getHcRatioText(p.hpKwh, p.hcKwh)}]` : "";
+          return `  - ${p.label} : ${p.kwhFormate}${costStr}${hcTxt}`;
         });
         consoLines.push(`• Mois précédents :\n${prec.join("\n")}`);
       }
@@ -1951,6 +1964,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const avgCostStr = avgCost > 0 ? `${avgCost.toFixed(2).replace(".", ",")} €/mois` : "-";
 
         consoLines.push(`• Total cumulé (${nbM} mois) : ${totKwh.toLocaleString("fr-FR")} kWh • ${totCostStr}`);
+        if (conso.totalHp && conso.totalHc) {
+          consoLines.push(`  (Total HP : ${conso.totalHp} kWh • Total HC : ${conso.totalHc} kWh) ${getHcRatioText(conso.totalHp, conso.totalHc)}`);
+        }
         consoLines.push(`• Moyenne mensuelle : ${avgKwh.toLocaleString("fr-FR")} kWh/mois • ${avgCostStr}`);
       }
     }
@@ -3389,6 +3405,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (consoEmptyMessage) consoEmptyMessage.classList.add("hidden");
 
+    function getHcRatioBadgeHtml(hp, hc) {
+      if (!hp || !hc) return "";
+      const total = hp + hc;
+      if (total === 0) return "";
+      const ratio = Math.round((hc / total) * 100);
+      const isRentable = ratio >= 30;
+      const badgeClass = isRentable ? "rentable" : "non-rentable";
+      const icon = isRentable ? "✅" : "⚠️";
+      return `<span class="conso-ratio-badge ${badgeClass}">${ratio}% HC ${icon}</span>`;
+    }
+
     // Réconciliation avec le total extrait directement de la page Espace Client si disponible
     if (activeTabContext?.pageTotalConso) {
       const pt = activeTabContext.pageTotalConso;
@@ -3421,13 +3448,14 @@ document.addEventListener("DOMContentLoaded", () => {
       if (consoMoisEnCoursBreakdown) {
         const parts = [];
         if (conso.moisEnCours.hpKwh && conso.moisEnCours.hcKwh) {
-          parts.push(`HP : ${conso.moisEnCours.hpKwh.toLocaleString("fr-FR")} kWh • HC : ${conso.moisEnCours.hcKwh.toLocaleString("fr-FR")} kWh`);
+          const badgeHtml = getHcRatioBadgeHtml(conso.moisEnCours.hpKwh, conso.moisEnCours.hcKwh);
+          parts.push(`HP : ${conso.moisEnCours.hpKwh.toLocaleString("fr-FR")} kWh • HC : ${conso.moisEnCours.hcKwh.toLocaleString("fr-FR")} kWh ${badgeHtml}`);
         }
         if (conso.moisEnCours.costEnergyEur !== undefined && conso.moisEnCours.costAboEur !== undefined && conso.moisEnCours.costAboEur > 0) {
           parts.push(`Énergie : ${conso.moisEnCours.costEnergyEur.toFixed(2).replace(".", ",")} € • Abonnement : ${conso.moisEnCours.costAboEur.toFixed(2).replace(".", ",")} €`);
         }
         if (parts.length > 0) {
-          consoMoisEnCoursBreakdown.textContent = parts.join(" | ");
+          consoMoisEnCoursBreakdown.innerHTML = parts.join(' <span style="margin: 0 4px; color: #52525b;">|</span> ');
           consoMoisEnCoursBreakdown.classList.remove("hidden");
         } else {
           consoMoisEnCoursBreakdown.textContent = "";
@@ -3504,7 +3532,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (item.hpKwh && item.hcKwh) {
           const sub = document.createElement("div");
           sub.className = "conso-breakdown-text";
-          sub.textContent = `HP : ${item.hpKwh.toLocaleString("fr-FR")} kWh • HC : ${item.hcKwh.toLocaleString("fr-FR")} kWh`;
+          const badgeHtml = getHcRatioBadgeHtml(item.hpKwh, item.hcKwh);
+          sub.innerHTML = `HP : ${item.hpKwh.toLocaleString("fr-FR")} kWh • HC : ${item.hcKwh.toLocaleString("fr-FR")} kWh ${badgeHtml}`;
           row.appendChild(sub);
         }
 
@@ -3531,6 +3560,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (consoAvgKwh) consoAvgKwh.textContent = `Moy. ${avgKwh.toLocaleString("fr-FR")} kWh/m`;
         if (consoAvgCost) consoAvgCost.textContent = avgCost > 0 ? `Moy. ${avgCost.toFixed(2).replace(".", ",")} €/m` : "-";
+
+        const consoTotalRatioHc = document.getElementById("consoTotalRatioHc");
+        if (consoTotalRatioHc) {
+          if (conso.totalHp && conso.totalHc) {
+            const ratio = Math.round((conso.totalHc / (conso.totalHp + conso.totalHc)) * 100);
+            const isRentable = ratio >= 30;
+            const badgeClass = isRentable ? "rentable" : "non-rentable";
+            const icon = isRentable ? "✅ Rentable" : "⚠️ Non rentable (< 30%)";
+            consoTotalRatioHc.innerHTML = `Ratio global : <span class="conso-ratio-badge ${badgeClass}">${ratio}% en Heures Creuses (${icon})</span>`;
+            consoTotalRatioHc.classList.remove("hidden");
+          } else {
+            consoTotalRatioHc.classList.add("hidden");
+          }
+        }
 
         consoTotalBox.classList.remove("hidden");
       } else {
