@@ -3324,8 +3324,8 @@ async function handleFetchSgeData(payload) {
                 const statutStr = String(typeof dossier.statut === "string" ? dossier.statut : (dossier.statut?.code || "")).toUpperCase();
                 const isEnCours = statutStr === "COURS";
                 let detail = null;
-                // Récupérer le détail pour les affaires en cours, ou les 3 premières si aucune en cours
-                if (isEnCours || dossiers.length <= 3) {
+                // Récupérer le détail pour les affaires en cours, et jusqu'à 10 affaires closes (pour avoir le détail dans l'historique sans surcharger l'API)
+                if (isEnCours || dossiers.indexOf(dossier) < 10) {
                   try {
                     const app = (dossier.applicationSource ? String(dossier.applicationSource).toLowerCase() : "adc5");
                     detail = await fetchUrl(`https://mfa.microapps.enedis.fr/${app}/api/affaires/${dossier.idAffaire}`);
