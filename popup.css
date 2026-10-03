@@ -1336,19 +1336,22 @@ body.mode-window #detachBtn {
 
 /* Carte individuelle d'affaire */
 .sge-affaire-card {
-  background: rgba(16, 0, 48, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: var(--radius-md);
-  padding: 12px;
+  padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   transition: all 0.2s ease;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
 }
 
 .sge-affaire-card.active {
+  border-left: 4px solid var(--accent-cyan);
   border-color: rgba(0, 240, 255, 0.4);
-  box-shadow: 0 2px 12px rgba(0, 240, 255, 0.08);
+  box-shadow: 0 4px 15px rgba(0, 240, 255, 0.15);
+  background: rgba(0, 240, 255, 0.05);
 }
 
 .sge-affaire-card.active:hover {
@@ -1356,10 +1359,10 @@ body.mode-window #detachBtn {
 }
 
 .sge-affaire-card.closed {
-  opacity: 0.9;
-  border-color: rgba(255, 255, 255, 0.08);
-  border-left: 3px solid rgba(255, 255, 255, 0.2);
-  background: rgba(10, 0, 30, 0.4);
+  opacity: 1;
+  border-left: 4px solid rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .sge-affaire-card-top {
