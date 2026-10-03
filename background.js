@@ -3308,13 +3308,29 @@ async function handleFetchSgeData(payload) {
           return res.json();
         };
 
+        const fetchPost = async (url, body) => {
+          const res = await fetch(url, {
+            method: "POST",
+            credentials: "include",
+            headers: { 
+              "Accept": "application/json",
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(body)
+          });
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+          return res.json();
+        };
+
         const fetchPrm = (endpoint) => fetchUrl(`${apiBase}/${endpoint}/${prmId}`);
 
         Promise.all([
           fetchPrm("situation-alimentation").catch(e => ({ error: e.message })),
           fetchPrm("situation-comptage").catch(e => ({ error: e.message })),
           fetchPrm("situations-contractuelles").catch(e => ({ error: e.message })),
-          fetchUrl(`https://mfa.microapps.enedis.fr/apoge/api/partenaires/rechercheAffaire?idPrm=${prmId}`).catch(e => ({ error: e.message }))
+          fetchPost(`https://mfa.microapps.enedis.fr/r2da/api/dossiers/_recherche?page=0&sort=desc&limit=20`, { idPrm: [prmId], text: prmId }).catch(e => ({ error: e.message }))
         ]).then(async ([alimentation, comptage, contractuel, affairesRaw]) => {
           let affairesList = [];
           if (affairesRaw && !affairesRaw.error) {
