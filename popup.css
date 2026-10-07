@@ -1,18 +1,19 @@
 /* Styles pour l'extension Récapitulatif Contrat Octopus & Kraken */
 :root {
-  --bg-main: #100030;
-  --bg-card: #1c0645;
-  --bg-card-subtle: #270c5e;
-  --text-main: #ffffff;
-  --text-muted: #a698c7;
-  --accent-pink: #ff0066;
-  --accent-cyan: #00f0ff;
-  --accent-green: #10b981;
-  --border-color: rgba(255, 255, 255, 0.12);
+  color-scheme: dark;
+  --bg-main: #180048;
+  --bg-card: #100030;
+  --bg-card-subtle: #2D1A83;
+  --text-main: #F0FFFF;
+  --text-muted: #A49FC8;
+  --accent-pink: #F050F8;
+  --accent-cyan: #60F0F8;
+  --accent-green: #18F0B8;
+  --border-color: rgba(148, 159, 255, 0.28);
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
-  --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow: 0 8px 24px rgba(16, 0, 48, 0.35);
   --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "SF Mono", "Segoe UI Mono", "Roboto Mono", Menlo, Consolas, monospace;
 }
@@ -566,7 +567,7 @@ body {
 
 .conso-sync-btn.spinning svg {
   animation: spin 0.8s linear infinite;
-  color: var(--octopus-pink);
+  color: var(--accent-pink);
 }
 
 .conso-content-body {
@@ -1582,10 +1583,10 @@ body.mode-window #detachBtn {
 
 @keyframes sgePulseAnim {
   0%, 100% {
-    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
+    box-shadow: 0 0 0 0 rgba(236, 130, 67, 0.4);
   }
   50% {
-    box-shadow: 0 0 0 5px rgba(245, 158, 11, 0);
+    box-shadow: 0 0 0 5px rgba(236, 130, 67, 0);
   }
 }
 
@@ -1800,31 +1801,19 @@ body.mode-fullscreen #fullscreenBtn {
 
 @media (min-width: 860px) {
   body.mode-fullscreen .content-view {
-    display: grid;
-    grid-template-columns: 400px 1fr;
-    gap: 20px;
-    align-items: start;
+    display: block;
+    columns: 2;
+    column-gap: 20px;
   }
 
-  body.mode-fullscreen .hero-card {
-    grid-column: 1;
+  body.mode-fullscreen .content-view > * {
+    break-inside: avoid;
+    margin-bottom: 20px;
   }
 
-  body.mode-fullscreen .details-card {
-    grid-column: 1;
-  }
-
-  body.mode-fullscreen .conso-card {
-    grid-column: 2;
-    grid-row: 1 / span 2;
-  }
-
-  body.mode-fullscreen .sge-card {
-    grid-column: 1 / span 2;
-  }
-
-  body.mode-fullscreen .actions-group {
-    grid-column: 1 / span 2;
+  body.mode-fullscreen .sge-card,
+  body.mode-fullscreen .actions-footer {
+    column-span: all;
   }
 }
 
@@ -1935,5 +1924,691 @@ body.mode-fullscreen #fullscreenBtn {
   background-color: #fff1f0;
   border: 1px solid #ffa39e;
   color: #cf1322;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Thème sombre — aligné sur la charte Octopus Energy
+   (design-system/tokens.css, thème .oe-dark)
+   ═══════════════════════════════════════════════════════════════════ */
+[data-theme="dark"] .badge-success {
+  background: rgba(16, 195, 149, 0.20);
+  color: #18F0B8;
+  border-color: rgba(16, 195, 149, 0.40);
+}
+
+[data-theme="dark"] .badge-danger {
+  background: rgba(255, 62, 104, 0.18);
+  color: #FF809B;
+  border-color: rgba(255, 62, 104, 0.40);
+}
+
+[data-theme="dark"] .badge-warning {
+  background: rgba(236, 130, 67, 0.18);
+  color: #FFA26B;
+  border-color: rgba(236, 130, 67, 0.40);
+}
+
+[data-theme="dark"] .badge-info {
+  background: rgba(96, 240, 248, 0.14);
+  color: #60F0F8;
+  border-color: rgba(96, 240, 248, 0.35);
+}
+
+[data-theme="dark"] .text-danger {
+  color: #FF809B !important;
+}
+
+[data-theme="dark"] .pricing-grid {
+  border-top-color: rgba(148, 159, 255, 0.16);
+}
+
+[data-theme="dark"] .price-box {
+  background: rgba(45, 26, 131, 0.22);
+  border-color: rgba(148, 159, 255, 0.18);
+}
+
+[data-theme="dark"] .detail-row {
+  border-bottom-color: rgba(148, 159, 255, 0.14);
+}
+
+[data-theme="dark"] .detail-value.address-value {
+  color: rgba(240, 255, 255, 0.80);
+}
+
+[data-theme="dark"] .copy-button:hover {
+  background: rgba(148, 159, 255, 0.15);
+}
+
+[data-theme="dark"] .spinner {
+  border-color: rgba(148, 159, 255, 0.18);
+}
+
+[data-theme="dark"] .primary-button {
+  background: linear-gradient(135deg, #F050F8 0%, #BB00D4 100%);
+  color: #100030;
+  box-shadow: 0 4px 14px rgba(240, 80, 248, 0.35);
+}
+
+[data-theme="dark"] .conso-sync-btn {
+  background: rgba(148, 159, 255, 0.08);
+  border-color: rgba(148, 159, 255, 0.20);
+}
+
+[data-theme="dark"] .conso-sync-btn:hover {
+  background: rgba(148, 159, 255, 0.16);
+  border-color: rgba(148, 159, 255, 0.30);
+}
+
+[data-theme="dark"] .conso-current-box {
+  border-color: rgba(96, 240, 248, 0.30);
+}
+
+[data-theme="dark"] .conso-last-reading {
+  color: rgba(164, 159, 200, 0.70);
+}
+
+[data-theme="dark"] .conso-month-row {
+  background: rgba(148, 159, 255, 0.05);
+  border-color: rgba(148, 159, 255, 0.12);
+}
+
+[data-theme="dark"] .conso-bar-bg {
+  background: rgba(148, 159, 255, 0.14);
+}
+
+[data-theme="dark"] .conso-empty-state {
+  background: rgba(148, 159, 255, 0.04);
+}
+
+[data-theme="dark"] .conso-total-box {
+  background: linear-gradient(135deg, rgba(96, 240, 248, 0.10) 0%, rgba(240, 80, 248, 0.10) 100%);
+  border-color: rgba(148, 159, 255, 0.20);
+  box-shadow: inset 0 1px 1px rgba(148, 159, 255, 0.08);
+}
+
+[data-theme="dark"] .conso-total-badge {
+  background: rgba(148, 159, 255, 0.14);
+}
+
+[data-theme="dark"] .conso-total-values {
+  background: rgba(16, 0, 48, 0.45);
+}
+
+[data-theme="dark"] .conso-total-col.left .conso-total-avg {
+  color: rgba(96, 240, 248, 0.85);
+}
+
+[data-theme="dark"] .conso-total-col.right .conso-total-avg {
+  color: rgba(240, 80, 248, 0.90);
+}
+
+[data-theme="dark"] .conso-total-separator {
+  background: rgba(148, 159, 255, 0.20);
+}
+
+[data-theme="dark"] .conso-total-ratio-hc {
+  border-top-color: rgba(148, 159, 255, 0.14);
+  color: #A49FC8;
+}
+
+[data-theme="dark"] .conso-ratio-badge.rentable {
+  background-color: rgba(16, 195, 149, 0.20);
+  color: #18F0B8;
+  border-color: rgba(16, 195, 149, 0.35);
+}
+
+[data-theme="dark"] .conso-ratio-badge.non-rentable {
+  background-color: rgba(236, 130, 67, 0.20);
+  color: #FFA26B;
+  border-color: rgba(236, 130, 67, 0.35);
+}
+
+[data-theme="dark"] .echeancier-card-header {
+  background: linear-gradient(135deg, rgba(88, 64, 255, 0.20), rgba(240, 80, 248, 0.12));
+}
+
+[data-theme="dark"] .echeancier-current-box {
+  border-color: rgba(88, 64, 255, 0.35);
+}
+
+[data-theme="dark"] .echeancier-tag {
+  background: rgba(88, 64, 255, 0.22);
+  color: #949FFF;
+}
+
+[data-theme="dark"] .echeancier-historique-header:hover,
+[data-theme="dark"] .echeancier-calc-header:hover {
+  background: rgba(148, 159, 255, 0.08);
+}
+
+[data-theme="dark"] .echeancier-table td {
+  border-bottom-color: rgba(148, 159, 255, 0.10);
+}
+
+[data-theme="dark"] .calc-input {
+  background: rgba(45, 26, 131, 0.35);
+  color-scheme: dark;
+}
+
+[data-theme="dark"] .calc-input:focus {
+  background: rgba(45, 26, 131, 0.50);
+}
+
+[data-theme="dark"] .calc-preset-chip {
+  background: rgba(148, 159, 255, 0.08);
+}
+
+[data-theme="dark"] .calc-preset-chip:hover {
+  background: rgba(148, 159, 255, 0.16);
+}
+
+[data-theme="dark"] .calc-preset-chip.active {
+  background: rgba(96, 240, 248, 0.16);
+}
+
+[data-theme="dark"] .echeancier-calc-result-box {
+  background: rgba(16, 0, 48, 0.45);
+  border-color: rgba(148, 159, 255, 0.16);
+}
+
+[data-theme="dark"] .calc-count-badge {
+  background: rgba(96, 240, 248, 0.14);
+}
+
+[data-theme="dark"] .calc-breakdown-list {
+  border-top-color: rgba(148, 159, 255, 0.12);
+}
+
+[data-theme="dark"] .sge-affaires-box {
+  border-color: rgba(236, 130, 67, 0.50);
+  box-shadow: 0 4px 14px rgba(236, 130, 67, 0.10);
+}
+
+[data-theme="dark"] .sge-affaires-header {
+  border-bottom-color: rgba(148, 159, 255, 0.14);
+}
+
+[data-theme="dark"] .sge-affaires-title {
+  color: #FFA26B;
+}
+
+[data-theme="dark"] .sge-affaires-empty {
+  background: rgba(16, 195, 149, 0.12);
+  border-color: rgba(16, 195, 149, 0.30);
+  color: #18F0B8;
+}
+
+[data-theme="dark"] .sge-affaire-card {
+  background: rgba(45, 26, 131, 0.18);
+  border-color: rgba(148, 159, 255, 0.28);
+  box-shadow: 0 4px 15px rgba(16, 0, 48, 0.35);
+}
+
+[data-theme="dark"] .sge-affaire-card.active {
+  border-color: rgba(96, 240, 248, 0.60);
+  border-left-color: #60F0F8;
+  box-shadow: 0 4px 15px rgba(96, 240, 248, 0.25);
+  background: rgba(96, 240, 248, 0.08);
+}
+
+[data-theme="dark"] .sge-affaire-card.closed {
+  border-color: rgba(148, 159, 255, 0.28);
+  border-left-color: rgba(148, 159, 255, 0.45);
+  background: rgba(148, 159, 255, 0.04);
+}
+
+[data-theme="dark"] .sge-affaire-id {
+  color: #60F0F8;
+  background: rgba(96, 240, 248, 0.10);
+  border-color: rgba(96, 240, 248, 0.30);
+}
+
+[data-theme="dark"] .sge-affaire-link-btn {
+  background: linear-gradient(135deg, #5840FF 0%, #6675F6 100%);
+  border-color: rgba(148, 159, 255, 0.30);
+}
+
+[data-theme="dark"] .sge-affaire-link-btn:hover {
+  background: linear-gradient(135deg, #6675F6 0%, #949FFF 100%);
+  box-shadow: 0 0 10px rgba(88, 64, 255, 0.45);
+}
+
+[data-theme="dark"] .sge-affaire-type-badge {
+  color: #FFA26B;
+  background: rgba(236, 130, 67, 0.16);
+  border-color: rgba(236, 130, 67, 0.35);
+}
+
+[data-theme="dark"] .sge-affaire-jalon-badge {
+  color: #FA98FF;
+  background: rgba(240, 80, 248, 0.14);
+  border-color: rgba(240, 80, 248, 0.30);
+}
+
+[data-theme="dark"] .sge-affaire-rdv-box {
+  background: rgba(96, 240, 248, 0.07);
+  border-color: rgba(96, 240, 248, 0.30);
+}
+
+[data-theme="dark"] .sge-affaire-comment-box {
+  background: rgba(148, 159, 255, 0.06);
+  border-left-color: #EC8243;
+}
+
+[data-theme="dark"] .sge-affaire-comment-header {
+  color: #FFA26B;
+}
+
+[data-theme="dark"] .sge-affaire-comment-text {
+  color: rgba(240, 255, 255, 0.85);
+}
+
+[data-theme="dark"] .sge-affaires-details {
+  border-top-color: rgba(148, 159, 255, 0.14);
+}
+
+[data-theme="dark"] .sge-alim-box {
+  border-color: rgba(96, 240, 248, 0.30);
+}
+
+[data-theme="dark"] .sge-comptage-box {
+  border-color: rgba(240, 80, 248, 0.25);
+}
+
+[data-theme="dark"] .sge-comptage-separator {
+  background: rgba(148, 159, 255, 0.14);
+}
+
+[data-theme="dark"] .sge-empty-state {
+  background: rgba(148, 159, 255, 0.05);
+}
+
+[data-theme="dark"] .sge-sync-button {
+  background: linear-gradient(135deg, #2D1A83 0%, #100030 100%);
+  border-color: rgba(96, 240, 248, 0.30);
+  color: #60F0F8;
+}
+
+[data-theme="dark"] .sge-sync-button:hover {
+  background: linear-gradient(135deg, #5840FF 0%, #2D1A83 100%);
+  border-color: #60F0F8;
+  box-shadow: 0 0 16px rgba(96, 240, 248, 0.20);
+}
+
+[data-theme="dark"] .sge-sync-button.loading span::before {
+  border-color: rgba(96, 240, 248, 0.30);
+  border-top-color: #60F0F8;
+}
+
+[data-theme="dark"] .alert-banner {
+  box-shadow: 0 2px 8px rgba(16, 0, 48, 0.35);
+}
+
+[data-theme="dark"] .alert-banner.danger-banner {
+  background-color: rgba(255, 62, 104, 0.12);
+  border-color: rgba(255, 62, 104, 0.40);
+  color: #FF809B;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Thème clair — valeurs reprises du design system Octopus Energy
+   (design-system/tokens.css, thème .oe-light)
+   Bascule via l'attribut data-theme posé sur <html> par theme-boot.js.
+   ═══════════════════════════════════════════════════════════════════ */
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-main: #F0FFFF;                      /* oe-ice */
+  --bg-card: #FFFFFF;                      /* oe-light surface */
+  --bg-card-subtle: #D9DDFF;               /* oe-dusty-sky (oe-surface-raised) */
+  --text-main: #180048;                    /* oe-hemocyanin */
+  --text-muted: rgba(24, 0, 72, 0.55);     /* oe-text-muted light */
+  --accent-pink: #BB00D4;                  /* oe-mulberry — lisible sur clair */
+  --accent-cyan: #0099C4;                  /* oe-chart-1 */
+  --accent-green: #048E6B;                 /* oe-elm */
+  --border-color: rgba(24, 0, 72, 0.15);   /* oe-border light */
+  --shadow: 0 8px 24px rgba(16, 0, 48, 0.12);
+}
+
+.theme-toggle .icon-sun {
+  display: none;
+}
+
+[data-theme="light"] .theme-toggle .icon-sun {
+  display: block;
+}
+
+[data-theme="light"] .theme-toggle .icon-moon {
+  display: none;
+}
+
+/* Badges */
+[data-theme="light"] .badge-success {
+  background: rgba(16, 195, 149, 0.12);
+  color: #048E6B;
+  border-color: rgba(16, 195, 149, 0.35);
+}
+
+[data-theme="light"] .badge-danger {
+  background: rgba(255, 62, 104, 0.12);
+  color: #C81E48;
+  border-color: rgba(255, 62, 104, 0.35);
+}
+
+[data-theme="light"] .badge-warning {
+  background: rgba(236, 130, 67, 0.14);
+  color: #B85A1B;
+  border-color: rgba(236, 130, 67, 0.4);
+}
+
+[data-theme="light"] .badge-info {
+  background: rgba(0, 200, 248, 0.12);
+  color: #0077A8;
+  border-color: rgba(0, 200, 248, 0.4);
+}
+
+[data-theme="light"] .text-danger {
+  color: #C81E48 !important;
+}
+
+/* Carte Hero / prix / détails */
+[data-theme="light"] .pricing-grid {
+  border-top-color: rgba(24, 0, 72, 0.12);
+}
+
+[data-theme="light"] .price-box {
+  background: rgba(88, 64, 255, 0.06);
+  border-color: rgba(24, 0, 72, 0.10);
+}
+
+[data-theme="light"] .detail-row {
+  border-bottom-color: rgba(24, 0, 72, 0.10);
+}
+
+[data-theme="light"] .detail-value.address-value {
+  color: rgba(24, 0, 72, 0.72);
+}
+
+[data-theme="light"] .copy-button:hover {
+  background: rgba(24, 0, 72, 0.08);
+}
+
+[data-theme="light"] .spinner {
+  border-color: rgba(24, 0, 72, 0.12);
+}
+
+[data-theme="light"] .primary-button {
+  background: linear-gradient(135deg, #F050F8 0%, #BB00D4 100%);
+  color: #100030;
+  box-shadow: 0 4px 14px rgba(240, 80, 248, 0.35);
+}
+
+/* Suivi conso */
+[data-theme="light"] .conso-sync-btn {
+  background: rgba(24, 0, 72, 0.04);
+  border-color: rgba(24, 0, 72, 0.15);
+}
+
+[data-theme="light"] .conso-sync-btn:hover {
+  background: rgba(24, 0, 72, 0.08);
+  border-color: rgba(24, 0, 72, 0.30);
+}
+
+[data-theme="light"] .conso-current-box {
+  border-color: rgba(0, 200, 248, 0.35);
+}
+
+[data-theme="light"] .conso-last-reading {
+  color: rgba(24, 0, 72, 0.50);
+}
+
+[data-theme="light"] .conso-month-row {
+  background: rgba(24, 0, 72, 0.03);
+  border-color: rgba(24, 0, 72, 0.08);
+}
+
+[data-theme="light"] .conso-bar-bg {
+  background: rgba(24, 0, 72, 0.10);
+}
+
+[data-theme="light"] .conso-empty-state {
+  background: rgba(24, 0, 72, 0.03);
+}
+
+[data-theme="light"] .conso-total-box {
+  background: linear-gradient(135deg, rgba(0, 200, 248, 0.10) 0%, rgba(240, 80, 248, 0.10) 100%);
+  border-color: rgba(24, 0, 72, 0.12);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.6);
+}
+
+[data-theme="light"] .conso-total-badge {
+  background: rgba(24, 0, 72, 0.06);
+}
+
+[data-theme="light"] .conso-total-values {
+  background: rgba(24, 0, 72, 0.04);
+}
+
+[data-theme="light"] .conso-total-col.left .conso-total-avg {
+  color: #0077A8;
+}
+
+[data-theme="light"] .conso-total-col.right .conso-total-avg {
+  color: #BB00D4;
+}
+
+[data-theme="light"] .conso-total-separator {
+  background: rgba(24, 0, 72, 0.15);
+}
+
+[data-theme="light"] .conso-total-ratio-hc {
+  border-top-color: rgba(24, 0, 72, 0.10);
+  color: rgba(24, 0, 72, 0.55);
+}
+
+[data-theme="light"] .conso-ratio-badge.rentable {
+  background-color: rgba(16, 195, 149, 0.14);
+  color: #048E6B;
+  border-color: rgba(16, 195, 149, 0.30);
+}
+
+[data-theme="light"] .conso-ratio-badge.non-rentable {
+  background-color: rgba(236, 130, 67, 0.14);
+  color: #B85A1B;
+  border-color: rgba(236, 130, 67, 0.30);
+}
+
+/* Échéancier de paiement */
+[data-theme="light"] .echeancier-card-header {
+  background: linear-gradient(135deg, rgba(88, 64, 255, 0.10), rgba(240, 80, 248, 0.08));
+}
+
+[data-theme="light"] .echeancier-current-box {
+  border-color: rgba(88, 64, 255, 0.35);
+}
+
+[data-theme="light"] .echeancier-tag {
+  background: rgba(88, 64, 255, 0.12);
+  color: #5840FF;
+}
+
+[data-theme="light"] .echeancier-historique-header:hover,
+[data-theme="light"] .echeancier-calc-header:hover {
+  background: rgba(24, 0, 72, 0.04);
+}
+
+[data-theme="light"] .echeancier-table td {
+  border-bottom-color: rgba(24, 0, 72, 0.08);
+}
+
+/* Calculateur de mensualités */
+[data-theme="light"] .calc-input {
+  background: #FFFFFF;
+  border-color: rgba(24, 0, 72, 0.18);
+  color-scheme: light;
+}
+
+[data-theme="light"] .calc-input:focus {
+  border-color: #00B3DF;
+  background: #FFFFFF;
+}
+
+[data-theme="light"] .calc-preset-chip {
+  background: rgba(24, 0, 72, 0.04);
+}
+
+[data-theme="light"] .calc-preset-chip:hover {
+  background: rgba(24, 0, 72, 0.08);
+  border-color: #00B3DF;
+}
+
+[data-theme="light"] .calc-preset-chip.active {
+  background: rgba(0, 200, 248, 0.14);
+  border-color: #00B3DF;
+}
+
+[data-theme="light"] .echeancier-calc-result-box {
+  background: rgba(24, 0, 72, 0.04);
+  border-color: rgba(24, 0, 72, 0.10);
+}
+
+[data-theme="light"] .calc-count-badge {
+  background: rgba(0, 200, 248, 0.14);
+}
+
+[data-theme="light"] .calc-breakdown-list {
+  border-top-color: rgba(24, 0, 72, 0.10);
+}
+
+/* Données SGE Enedis */
+[data-theme="light"] .sge-affaires-box {
+  border-color: rgba(236, 130, 67, 0.5);
+  box-shadow: 0 4px 14px rgba(236, 130, 67, 0.08);
+}
+
+[data-theme="light"] .sge-affaires-header {
+  border-bottom-color: rgba(24, 0, 72, 0.12);
+}
+
+[data-theme="light"] .sge-affaires-title {
+  color: #B85A1B;
+}
+
+[data-theme="light"] .sge-affaires-empty {
+  background: rgba(16, 195, 149, 0.10);
+  border-color: rgba(16, 195, 149, 0.30);
+  color: #048E6B;
+}
+
+[data-theme="light"] .sge-affaire-card {
+  background: #FFFFFF;
+  border-color: rgba(24, 0, 72, 0.15);
+  box-shadow: 0 4px 15px rgba(16, 0, 48, 0.08);
+}
+
+[data-theme="light"] .sge-affaire-card.active {
+  border-color: rgba(0, 200, 248, 0.5);
+  border-left-color: #00B3DF;
+  box-shadow: 0 4px 15px rgba(0, 200, 248, 0.18);
+  background: rgba(0, 200, 248, 0.07);
+}
+
+[data-theme="light"] .sge-affaire-card.closed {
+  border-color: rgba(24, 0, 72, 0.15);
+  border-left-color: rgba(24, 0, 72, 0.25);
+  background: #FFFFFF;
+}
+
+[data-theme="light"] .sge-affaire-id {
+  color: #0077A8;
+  background: rgba(0, 200, 248, 0.10);
+  border-color: rgba(0, 200, 248, 0.30);
+}
+
+[data-theme="light"] .sge-affaire-link-btn {
+  background: linear-gradient(135deg, #5840FF 0%, #949FFF 100%);
+  border-color: rgba(24, 0, 72, 0.10);
+}
+
+[data-theme="light"] .sge-affaire-link-btn:hover {
+  background: linear-gradient(135deg, #6B57FF 0%, #A6B0FF 100%);
+  box-shadow: 0 0 10px rgba(88, 64, 255, 0.30);
+}
+
+[data-theme="light"] .sge-affaire-type-badge {
+  color: #B85A1B;
+  background: rgba(236, 130, 67, 0.14);
+  border-color: rgba(236, 130, 67, 0.35);
+}
+
+[data-theme="light"] .sge-affaire-jalon-badge {
+  color: #BB00D4;
+  background: rgba(240, 80, 248, 0.12);
+  border-color: rgba(240, 80, 248, 0.30);
+}
+
+[data-theme="light"] .sge-affaire-rdv-box {
+  background: rgba(0, 200, 248, 0.07);
+  border-color: rgba(0, 200, 248, 0.30);
+}
+
+[data-theme="light"] .sge-affaire-comment-box {
+  background: rgba(24, 0, 72, 0.03);
+  border-left-color: #EC8243;
+}
+
+[data-theme="light"] .sge-affaire-comment-header {
+  color: #B85A1B;
+}
+
+[data-theme="light"] .sge-affaire-comment-text {
+  color: rgba(24, 0, 72, 0.80);
+}
+
+[data-theme="light"] .sge-affaires-details {
+  border-top-color: rgba(24, 0, 72, 0.12);
+}
+
+[data-theme="light"] .sge-alim-box {
+  border-color: rgba(0, 200, 248, 0.35);
+}
+
+[data-theme="light"] .sge-comptage-box {
+  border-color: rgba(240, 80, 248, 0.30);
+}
+
+[data-theme="light"] .sge-comptage-title {
+  color: #BB00D4;
+}
+
+[data-theme="light"] .sge-comptage-separator {
+  background: rgba(24, 0, 72, 0.10);
+}
+
+[data-theme="light"] .sge-empty-state {
+  background: rgba(24, 0, 72, 0.03);
+}
+
+[data-theme="light"] .sge-sync-button {
+  background: linear-gradient(135deg, rgba(88, 64, 255, 0.10) 0%, rgba(0, 200, 248, 0.12) 100%);
+  border-color: rgba(88, 64, 255, 0.40);
+  color: #5840FF;
+}
+
+[data-theme="light"] .sge-sync-button:hover {
+  background: linear-gradient(135deg, rgba(88, 64, 255, 0.16) 0%, rgba(0, 200, 248, 0.18) 100%);
+  border-color: #5840FF;
+  box-shadow: 0 0 16px rgba(88, 64, 255, 0.15);
+}
+
+[data-theme="light"] .sge-sync-button.loading span::before {
+  border-color: rgba(88, 64, 255, 0.30);
+  border-top-color: #5840FF;
+}
+
+[data-theme="light"] .alert-banner.danger-banner {
+  background-color: rgba(255, 62, 104, 0.12);
+  border-color: rgba(255, 62, 104, 0.40);
+  color: #C81E48;
 }
 

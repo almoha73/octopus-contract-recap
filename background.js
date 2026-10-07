@@ -3034,6 +3034,7 @@ function aggregateReadingsByMonth(readingNodes, contract = null) {
 
     let finalCostEnergy = Math.round(costEnergy * 100) / 100;
     let finalCostAbo = Math.round(costAbo * 100) / 100;
+    const finalTotalCost = Math.round((finalCostEnergy + finalCostAbo) * 100) / 100;
     const d = new Date(yearNum, monthNum - 1, 1);
     const moisLabel = d.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
     const moisCourt = d.toLocaleDateString("fr-FR", { month: "short", year: "numeric" });
@@ -3049,8 +3050,8 @@ function aggregateReadingsByMonth(readingNodes, contract = null) {
       kwhFormate: formatKwhValue(roundedKwh),
       costEnergyEur: finalCostEnergy > 0 ? finalCostEnergy : null,
       costAboEur: finalCostAbo > 0 ? finalCostAbo : null,
-      costEur: finalTotalCost !== null ? finalTotalCost : null,
-      costFormate: finalTotalCost !== null ? `${finalTotalCost.toFixed(2).replace(".", ",")} €` : "-",
+      costEur: finalTotalCost > 0 ? finalTotalCost : null,
+      costFormate: finalTotalCost > 0 ? `${finalTotalCost.toFixed(2).replace(".", ",")} €` : "-",
       hpKwh: hpKwh > 0 ? Math.round(hpKwh * 100) / 100 : null,
       hcKwh: hcKwh > 0 ? Math.round(hcKwh * 100) / 100 : null,
       daysRecorded: daysRecorded,

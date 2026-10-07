@@ -270,6 +270,46 @@ document.addEventListener("DOMContentLoaded", () => {
     document.title = "🐙 Octopus & Kraken - Dashboard Contrat";
   }
 
+  // Thème clair / sombre (persisté et synchronisé entre popup, fenêtre et dashboard)
+  const themeToggleBtn = document.getElementById("themeToggleBtn");
+  const THEME_STORAGE_KEY = "recap_theme";
+
+  function applyTheme(theme) {
+    const next = theme === "light" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    if (themeToggleBtn) {
+      const label = next === "light" ? "Passer en thème sombre" : "Passer en thème clair";
+      themeToggleBtn.setAttribute("title", label);
+      themeToggleBtn.setAttribute("aria-label", label);
+    }
+  }
+
+  function persistTheme(theme) {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch (error) {}
+    try {
+      chrome.storage.local.set({ [THEME_STORAGE_KEY]: theme });
+    } catch (error) {}
+  }
+
+  applyTheme(document.documentElement.getAttribute("data-theme") || "light");
+
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener("click", () => {
+      const current = document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+      const next = current === "light" ? "dark" : "light";
+      applyTheme(next);
+      persistTheme(next);
+    });
+  }
+
+  chrome.storage.local.get([THEME_STORAGE_KEY], (result) => {
+    if (result && result[THEME_STORAGE_KEY]) {
+      applyTheme(result[THEME_STORAGE_KEY]);
+    }
+  });
+
   let currentAccountNumber = null;
   let contractsList = [];
   let currentContract = null;
@@ -3716,7 +3756,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Écouteur réactif des mises à jour du cache de fond (enrichissement conso multi-logements)
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName !== "local" || !currentAccountNumber) return;
+    if (areaName !== "local") return;
+    if (changes[THEME_STORAGE_KEY]) {
+      applyTheme(changes[THEME_STORAGE_KEY].newValue);
+    }
+    if (!currentAccountNumber) return;
     const cacheKey = `account_cache_${currentAccountNumber}`;
     if (changes[cacheKey]?.newValue) {
       const updatedAccount = changes[cacheKey].newValue;
