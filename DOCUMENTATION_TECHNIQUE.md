@@ -329,6 +329,7 @@ fragment IntervalMeasurement on IntervalMeasurementType {
    - **Exclusion des mois antérieurs :** L'extension vérifie la date d'effet du contrat (`contract.rawValidFrom`). Aucun mois antérieur à la souscription n'est interrogé ni affiché (par exemple, si la cliente a souscrit le 12 décembre 2025, le mois de novembre 2025 est automatiquement écarté même si le compteur physique Linky possédait des impulsions antérieures).
    - **Exclusion des mois postérieurs :** Pour les contrats résiliés (`contract.rawValidTo`), les mois postérieurs à la résiliation sont automatiquement exclus.
    - **Plages mensuelles (jusqu'aux 12 derniers mois éligibles) :** L'extension génère les mois calendaires éligibles (le mois en cours + jusqu'aux 11 mois précédents dans la limite de validité du contrat) et interroge l'API en parallèle (`Promise.all`).
+   - **Périmètre au niveau PRM :** lorsque plusieurs contrats se succèdent sur le même PRM (changement d'offre), le périmètre temporel est l'**union** de leurs périodes (voir §6.E), afin de ne pas couper l'historique au jour du changement d'offre.
 2. **Calcul fidèle des volumes journaliers et mensuels (Précision jusqu'à 2 décimales) :**
    - **Mois d'emménagement (ex: Décembre 2025) :** La consommation sous contrat correspond à la somme des tranches d'énergie facturées depuis la prise d'effet (**857,7 kWh** : 550 HP + 307,7 HC).
    - **Mois complets sous contrat :** Le champ `node.value` porte la télérelève métrologique Linky avec sa précision maximale. L'extension totalise ces valeurs au centième de kWh près (`Math.round(totalMonthKwh * 100) / 100`) et applique la fonction `formatKwhValue` :
@@ -366,7 +367,20 @@ Pour éliminer toute attente de 1 à 2 secondes lors de l'ouverture du popup :
    - Lorsque l'utilisateur clique sur l'icône de l'extension : `popup.js` lit immédiatement `account_cache_${accountNumber}`.
    - **Les données s'affichent instantanément à 0 ms, sans écran de chargement.**
    - Une revalidation silencieuse en arrière-plan (`stale-while-revalidate`) s'assure en tâche de fond que les informations restent parfaitement à jour.
-   - Le bouton « Rafraîchir » (`refreshBtn`) permet de forcer à tout moment une synchronisation en direct (`bypassCache: true`).
+    - Le bouton « Rafraîchir » (`refreshBtn`) permet de forcer à tout moment une synchronisation en direct (`bypassCache: true`).
+
+### E. Suivi Conso au Niveau PRM & Gestion des Changements d'Offre
+
+Depuis `CACHE_VERSION = 13` :
+
+1. **Le suivi conso appartient au compteur (PRM), pas à l'offre :**
+   - Un même PRM peut porter plusieurs contrats successifs (changement d'offre) : l'ancien apparaît résilié, le nouveau actif, et la date de fin de l'ancien coïncide souvent avec la date de début du nouveau.
+   - Pour éviter de couper l'historique au jour du changement, le suivi est calculé **une seule fois par PRM**, sur l'**union des périodes** de tous ses contrats (`buildPrmValidityContract` : `rawValidFrom` = plus ancienne date d'effet, `rawValidTo` = plus récente date de fin, ouverte si un contrat est actif), puis **partagé entre tous les contrats de ce PRM** (`enrichContractsWithConso`, handler `FETCH_CONSO_DATA`). Un PRM différent reste un compteur différent : l'isolation entre logements est conservée.
+2. **Requalification des statuts par PRM (`applyPrmContinuity`) :**
+   - `validFrom` et `validTo` **le même jour** → statut **« Non activé »** (contrat jamais activé, conservé pour connaître l'offre prévue sur ce compteur).
+   - `validTo` de l'ancien == `validFrom` du suivant (même jour, même PRM) → statut **« Changement d'offre »** au lieu de « Résilié » (sélecteur : 🔁, badge `info`).
+3. **Mois en cours absent = aucune conso affichée :** si le mois calendaire courant n'a pas de relevé, le bloc n'affiche **ni mois en cours, ni mois précédents, ni total cumulé** (flag `currentMonthPending`). Seul l'avertissement subsiste ; si le compteur est communicant (`linky === "Oui"`), il invite le conseiller à vérifier les autorisations de collecte Enedis. Badge « Relevé en attente ».
+4. **Lecture DOM cantonnée à l'onglet Mois :** le total lu dans la page (« Total \<mois\> \<année\> … €/kWh ») n'est extrait que sur les URLs `/suivi-conso` ; les cartes de l'accueil (« Ma conso du mois dernier ») sont ignorées (`pageTotalConso`).
 
 ---
 

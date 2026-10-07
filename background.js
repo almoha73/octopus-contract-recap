@@ -50,25 +50,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Récupération dédiée du suivi de consommation mensuel
   if (message.type === "FETCH_CONSO_DATA") {
     const { accountNumber, prmId, propertyId, contract, propertyIds, propertyMapping, tabId, forceSync } = message.payload || {};
-    fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, contract, propertyMapping, propertyIds, tabId, forceSync)
-      .then(async (data) => {
-        if (accountNumber && data && data.hasData) {
-          try {
-            const cachedContracts = await getCachedAccount(accountNumber);
-            if (cachedContracts && Array.isArray(cachedContracts)) {
-              const matched = cachedContracts.find(c => String(c.prm) === String(prmId) || String(c.id) === String(contract?.id));
-              if (matched) {
-                matched.consoMensuelle = data;
-                if (data.propertyId && !matched.propertyId) {
-                  matched.propertyId = data.propertyId;
-                }
-                await saveAccountToCache(accountNumber, cachedContracts, propertyMapping, propertyIds);
-              }
-            }
-          } catch (_) {}
+    (async () => {
+      // Le suivi conso est calculé par PRM (compteur), sur l'union des périodes de ses contrats
+      let group = contract ? [contract] : [];
+      try {
+        const cached = await getCachedAccount(accountNumber);
+        if (Array.isArray(cached)) {
+          const siblings = cached.filter(c => String(c.prm) === String(prmId));
+          if (siblings.length > 0) group = siblings;
         }
-        sendResponse({ success: true, data });
-      })
+      } catch (_) {}
+
+      const mergedContract = buildPrmValidityContract(group, contract) || contract;
+      const data = await fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, mergedContract, propertyMapping, propertyIds, tabId, forceSync);
+
+      if (accountNumber && data && data.hasData) {
+        try {
+          const cachedContracts = await getCachedAccount(accountNumber);
+          if (cachedContracts && Array.isArray(cachedContracts)) {
+            let matches = cachedContracts.filter(c => String(c.prm) === String(prmId));
+            if (matches.length === 0) {
+              matches = cachedContracts.filter(c => String(c.id) === String(contract?.id));
+            }
+            if (matches.length > 0) {
+              for (const m of matches) {
+                m.consoMensuelle = data;
+                if (data.propertyId && !m.propertyId) m.propertyId = data.propertyId;
+              }
+              await saveAccountToCache(accountNumber, cachedContracts, propertyMapping, propertyIds);
+            }
+          }
+        } catch (_) {}
+      }
+
+      return data;
+    })()
+      .then((data) => sendResponse({ success: true, data }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
@@ -79,6 +96,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const contracts = edges.map(e => {
       try { return formatAgreementNode(e.node); } catch(_) { return null; }
     }).filter(Boolean);
+    applyPrmContinuity(contracts);
     sendResponse({ success: true, data: contracts });
     // Réponse synchrone : ne pas retourner true
     return false;
@@ -134,7 +152,7 @@ const ACCOUNT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes de validité
 const preloadCooldowns = new Map(); // accountNumber -> timestamp du dernier préchargement
 const activePreloadLocks = new Set(); // accountNumber en cours de préchargement
 
-const CACHE_VERSION = 12; // v12 : plus de repli du mois en cours sur le dernier mois dispo + flag currentMonthPending
+const CACHE_VERSION = 13; // v13 : suivi conso calculé par PRM (partagé entre offres) + statuts changement d'offre / non activé
 
 /**
  * Récupère les données en cache local pour un compte si elles sont encore valides
@@ -1063,6 +1081,9 @@ async function executeAgreementsQuery(accountNumber, idsToQuery) {
     );
   }
 
+  // Requalification des statuts par PRM (changement d'offre / contrat jamais activé)
+  applyPrmContinuity(uniqueContracts);
+
   return { contracts: uniqueContracts, errors: lastErrors };
 }
 
@@ -1473,6 +1494,115 @@ function formatAgreementNode(node) {
       energySupplyRateKeys: Object.keys(node.energySupplyRate || {})
     }
   };
+}
+
+/**
+ * Clé jour (YYYY-MM-DD) d'une date, ou null si invalide
+ */
+function toDayKey(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Pour un même PRM, identifie les contrats en continuité (changement d'offre)
+ * et ceux jamais activés (date de début == date de fin, même jour).
+ * Ne modifie jamais le PRM ni l'offre : on garde le contrat pour savoir sur quelle offre il portait.
+ */
+function applyPrmContinuity(contracts) {
+  if (!Array.isArray(contracts) || contracts.length === 0) return contracts;
+
+  const groups = new Map();
+  for (const c of contracts) {
+    const prm = c && c.prm && c.prm !== "-" ? String(c.prm) : null;
+    if (!prm) continue;
+    if (!groups.has(prm)) groups.set(prm, []);
+    groups.get(prm).push(c);
+  }
+
+  for (const group of groups.values()) {
+    const sorted = [...group].sort((a, b) => {
+      const da = new Date(a.rawValidFrom || 0).getTime();
+      const db = new Date(b.rawValidFrom || 0).getTime();
+      return da - db;
+    });
+
+    for (let i = 0; i < sorted.length; i++) {
+      const c = sorted[i];
+      const from = toDayKey(c.rawValidFrom);
+      const to = toDayKey(c.rawValidTo);
+
+      if (from && to && from === to) {
+        c.statut = "Non activé";
+        c.isNeverActivated = true;
+        c.isReallyActive = false;
+        c.isActive = false;
+        continue;
+      }
+
+      const next = sorted[i + 1];
+      if (next && !c.isReallyActive) {
+        const nextFrom = toDayKey(next.rawValidFrom);
+        if (to && nextFrom && to === nextFrom) {
+          c.statut = "Changement d'offre";
+          c.isOfferChange = true;
+        }
+      }
+    }
+  }
+
+  return contracts;
+}
+
+/**
+ * Contrat représentatif d'un PRM : le contrat actif le plus récent, sinon le plus récent
+ */
+function pickPrmRepresentative(group, fallback) {
+  if (!Array.isArray(group) || group.length === 0) return fallback || null;
+  const active = group.filter(c => c.isReallyActive);
+  const pool = active.length > 0 ? active : group;
+  return [...pool].sort((a, b) => new Date(b.rawValidFrom || 0) - new Date(a.rawValidFrom || 0))[0];
+}
+
+/**
+ * Construit un contrat "virtuel" couvrant l'union des périodes des contrats d'un même PRM,
+ * pour calculer un suivi conso unique par compteur (et non coupé au changement d'offre).
+ * Reprend l'offre/les tarifs du contrat représentatif.
+ */
+function buildPrmValidityContract(group, fallback) {
+  const rep = pickPrmRepresentative(group, fallback) || fallback;
+  if (!rep) return null;
+
+  let minFrom = null;
+  let maxTo = null;
+  let hasOpenEnd = false;
+  let hasFrom = false;
+
+  for (const c of (Array.isArray(group) ? group : [])) {
+    const f = c.rawValidFrom ? new Date(c.rawValidFrom) : null;
+    if (f && !isNaN(f.getTime())) {
+      hasFrom = true;
+      if (!minFrom || f < minFrom) minFrom = f;
+    }
+    const t = c.rawValidTo ? new Date(c.rawValidTo) : null;
+    if (t && !isNaN(t.getTime())) {
+      if (!maxTo || t > maxTo) maxTo = t;
+    } else {
+      hasOpenEnd = true;
+    }
+  }
+
+  if (!hasFrom) return rep;
+
+  const merged = Object.assign({}, rep);
+  merged.rawValidFrom = minFrom.toISOString();
+  merged.rawValidTo = hasOpenEnd ? null : (maxTo ? maxTo.toISOString() : rep.rawValidTo);
+  return merged;
 }
 
 /**
@@ -2441,8 +2571,10 @@ async function resolvePropertyIdsForContracts(accountNumber, contracts, property
 }
 
 /**
- * Enrichit chaque contrat individuellement avec son propre suivi de consommation
- * lié strictement à son numéro de PRM et son propertyId (isolation totale entre logements différents)
+ * Enrichit les contrats avec le suivi de consommation.
+ * Le suivi est calculé par PRM (le compteur), sur l'union des périodes de tous
+ * les contrats partageant ce PRM (changement d'offre inclus), puis partagé entre eux.
+ * Un PRM différent = un compteur différent : l'isolation entre logements est conservée.
  */
 async function enrichContractsWithConso(contracts, accountNumber, propertyMapping = [], propertyIds = []) {
   if (!contracts || contracts.length === 0) return contracts;
@@ -2454,24 +2586,42 @@ async function enrichContractsWithConso(contracts, accountNumber, propertyMappin
     console.warn("[Background] Erreur resolvePropertyIdsForContracts :", resErr.message);
   }
 
-  // SÉQUENTIEL au lieu de Promise.all pour éviter que chaque contrat
-  // déclenche simultanément un performBackgroundSync et ouvre N onglets
+  // Regrouper par PRM : le suivi conso appartient au compteur, pas à l'offre.
+  // Un seul calcul par PRM, partagé entre ses contrats (changement d'offre inclus).
+  const groups = new Map();
   for (const c of contracts) {
-    if (c.prm && c.prm !== "-") {
-      if (c.consoMensuelle && c.consoMensuelle.hasData) {
-        continue;
+    if (!c.prm || c.prm === "-") continue;
+    const prm = String(c.prm);
+    if (!groups.has(prm)) groups.set(prm, []);
+    groups.get(prm).push(c);
+  }
+
+  // SÉQUENTIEL pour éviter que chaque PRM déclenche un performBackgroundSync simultané
+  for (const [prm, group] of groups) {
+    // Réutiliser une conso déjà résolue sur l'un des contrats du PRM
+    const existing = group.find(c => c.consoMensuelle && c.consoMensuelle.hasData);
+    if (existing) {
+      for (const c of group) {
+        if (!c.consoMensuelle || !c.consoMensuelle.hasData) c.consoMensuelle = existing.consoMensuelle;
+        if (existing.propertyId && !c.propertyId) c.propertyId = existing.propertyId;
       }
-      try {
-        const conso = await fetchMonthlyConsumptionData(accountNumber, c.prm, c.propertyId, c, propertyMapping, propertyIds);
-        if (conso) {
+      continue;
+    }
+
+    const rep = pickPrmRepresentative(group, group[0]);
+    const mergedContract = buildPrmValidityContract(group, rep);
+    try {
+      const conso = await fetchMonthlyConsumptionData(accountNumber, prm, rep?.propertyId, mergedContract, propertyMapping, propertyIds);
+      if (conso) {
+        for (const c of group) {
           c.consoMensuelle = conso;
           if (conso.propertyId && !c.propertyId) {
             c.propertyId = conso.propertyId;
           }
         }
-      } catch (consoErr) {
-        console.warn(`[Background] Suivi conso non disponible pour PRM ${c.prm} :`, consoErr.message);
       }
+    } catch (consoErr) {
+      console.warn(`[Background] Suivi conso non disponible pour PRM ${prm} :`, consoErr.message);
     }
   }
   return contracts;

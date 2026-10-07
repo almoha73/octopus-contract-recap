@@ -50,7 +50,7 @@ const GRAPHQL_AGREEMENTS_QUERY = `
   }
 `;
 
-const CACHE_VERSION = 12; // v12 : plus de repli du mois en cours sur le dernier mois dispo + flag currentMonthPending
+const CACHE_VERSION = 13; // v13 : suivi conso calculé par PRM (partagé entre offres) + statuts changement d'offre / non activé
 
 document.addEventListener("DOMContentLoaded", () => {
   // Éléments du DOM
@@ -3267,8 +3267,20 @@ document.addEventListener("DOMContentLoaded", () => {
       contracts.forEach((c) => {
         const option = document.createElement("option");
         option.value = String(c.id);
-        const icon = c.isReallyActive ? "🟢" : "🔴";
-        const statutTxt = c.isReallyActive ? "Actif" : `Résilié${c.dateFin ? " le " + c.dateFin : ""}`;
+        let icon = "🔴";
+        let statutTxt = `Résilié${c.dateFin ? " le " + c.dateFin : ""}`;
+        if (c.isReallyActive) {
+          icon = "🟢";
+          statutTxt = "Actif";
+        } else if (c.statut === "Changement d'offre") {
+          icon = "🔁";
+          statutTxt = "Changement d'offre";
+        } else if (c.statut === "Non activé") {
+          icon = "⚪";
+          statutTxt = "Non activé";
+        } else if (c.statut && c.statut !== "Résilié") {
+          statutTxt = c.statut;
+        }
         const tarifTxt = c.prixKwhTTC && c.prixKwhTTC !== "-" ? ` • ${c.prixKwhTTC}` : "";
         option.textContent = `${icon} ${c.typeEnergie} - PRM ${c.prm} [${statutTxt}] (${c.nomOffre}${tarifTxt})`;
         contractSelect.appendChild(option);
@@ -3326,6 +3338,8 @@ document.addEventListener("DOMContentLoaded", () => {
       badgeStatut.className = "badge badge-success";
     } else if (c.statut === "Résilié" || c.statut === "Annulé") {
       badgeStatut.className = "badge badge-danger";
+    } else if (c.statut === "Changement d'offre") {
+      badgeStatut.className = "badge badge-info";
     } else {
       badgeStatut.className = "badge badge-warning";
     }
@@ -3445,12 +3459,16 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (response?.success && response.data && response.data.hasData) {
-        contract.consoMensuelle = response.data;
-        if (response.data.propertyId && !contract.propertyId) {
-          contract.propertyId = response.data.propertyId;
+        const data = response.data;
+        // Le suivi conso est partagé entre tous les contrats du même PRM (changement d'offre inclus)
+        const targets = (contractsList || []).filter(c => String(c.prm) === String(contract.prm));
+        if (targets.length === 0) targets.push(contract);
+        for (const t of targets) {
+          t.consoMensuelle = data;
+          if (data.propertyId && !t.propertyId) t.propertyId = data.propertyId;
         }
-        if (currentContract && String(currentContract.id) === String(contract.id)) {
-          renderConsoDetails(contract.consoMensuelle);
+        if (currentContract && String(currentContract.prm) === String(contract.prm)) {
+          renderConsoDetails(data);
         }
         if (currentAccountNumber && contractsList && contractsList.length > 0) {
           chrome.storage.local.set({
