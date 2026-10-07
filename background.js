@@ -134,7 +134,7 @@ const ACCOUNT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes de validité
 const preloadCooldowns = new Map(); // accountNumber -> timestamp du dernier préchargement
 const activePreloadLocks = new Set(); // accountNumber en cours de préchargement
 
-const CACHE_VERSION = 11; // v11 : Mutex performBackgroundSync + séquentiel enrichContractsWithConso + guard fetchConso
+const CACHE_VERSION = 12; // v12 : plus de repli du mois en cours sur le dernier mois dispo + flag currentMonthPending
 
 /**
  * Récupère les données en cache local pour un compte si elles sont encore valides
@@ -1940,8 +1940,9 @@ async function fetchMeasurementsByProperty(propertyId, prmId, contract = null) {
   const now = new Date();
   const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-  const moisEnCours = validMonths.find(m => m.yearMonth === currentYearMonth) || validMonths[0];
+  const moisEnCours = validMonths.find(m => m.yearMonth === currentYearMonth) || null;
   const moisPrecedents = validMonths.filter(m => m !== moisEnCours);
+  const currentMonthPending = !moisEnCours;
   const maxKwh = Math.max(...validMonths.map(m => m.kwh || 0), 1);
 
   let derniereReleve = null;
@@ -1972,6 +1973,7 @@ async function fetchMeasurementsByProperty(propertyId, prmId, contract = null) {
     hasData: true,
     moisEnCours: moisEnCours,
     moisPrecedents: moisPrecedents,
+    currentMonthPending: currentMonthPending,
     maxKwh: maxKwh,
     derniereReleve: derniereReleve,
     totalMoisDisponibles: validMonths.length,
@@ -3059,8 +3061,9 @@ function aggregateReadingsByMonth(readingNodes, contract = null) {
     };
   });
 
-  const moisEnCours = items.find(i => i.yearMonth === currentYearMonth) || items[0];
+  const moisEnCours = items.find(i => i.yearMonth === currentYearMonth) || null;
   const moisPrecedents = items.filter(i => i !== moisEnCours);
+  const currentMonthPending = !moisEnCours;
   const maxKwh = Math.max(...items.map(i => i.kwh || 0), 1);
 
   let derniereReleve = null;
@@ -3085,6 +3088,7 @@ function aggregateReadingsByMonth(readingNodes, contract = null) {
     hasData: true,
     moisEnCours: moisEnCours,
     moisPrecedents: moisPrecedents,
+    currentMonthPending: currentMonthPending,
     maxKwh: maxKwh,
     derniereReleve: derniereReleve,
     totalMoisDisponibles: items.length,
@@ -3151,14 +3155,16 @@ function parseMonthlyConsumption(pageProps, contract = null) {
   const now = new Date();
   const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-  const moisEnCours = bestItems.find(item => item.yearMonth === currentYearMonth) || bestItems[0];
+  const moisEnCours = bestItems.find(item => item.yearMonth === currentYearMonth) || null;
   const moisPrecedents = bestItems.filter(item => item !== moisEnCours);
+  const currentMonthPending = !moisEnCours;
   const maxKwh = Math.max(...bestItems.map(i => i.kwh || 0), 1);
 
   return {
     hasData: true,
     moisEnCours,
     moisPrecedents,
+    currentMonthPending,
     maxKwh,
     totalMoisDisponibles: bestItems.length
   };

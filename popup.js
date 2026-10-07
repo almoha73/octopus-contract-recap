@@ -50,7 +50,7 @@ const GRAPHQL_AGREEMENTS_QUERY = `
   }
 `;
 
-const CACHE_VERSION = 11; // v11 : Mutex performBackgroundSync + séquentiel enrichContractsWithConso + guard fetchConso
+const CACHE_VERSION = 12; // v12 : plus de repli du mois en cours sur le dernier mois dispo + flag currentMonthPending
 
 document.addEventListener("DOMContentLoaded", () => {
   // Éléments du DOM
@@ -105,6 +105,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const consoAvgKwh = document.getElementById("consoAvgKwh");
   const consoAvgCost = document.getElementById("consoAvgCost");
   const consoEmptyMessage = document.getElementById("consoEmptyMessage");
+  const consoEnedisWarning = document.getElementById("consoEnedisWarning");
+  const consoEnedisWarningText = document.getElementById("consoEnedisWarningText");
   const badgeConsoStatus = document.getElementById("badgeConsoStatus");
   const syncConsoBtn = document.getElementById("syncConsoBtn");
 
@@ -2598,30 +2600,34 @@ document.addEventListener("DOMContentLoaded", () => {
               }
 
               // Détection proactive du total officiel affiché à l'écran sur l'Espace Client (ex: Total Décembre 2025: 151,64€ ou 857,7 kWh)
+              // Cantonnée à la page « suivi conso » (onglet Mois) : on ignore l'accueil et sa carte « conso du mois dernier ».
               let pageTotalConso = null;
               try {
-                const bodyText = document.body?.innerText || "";
-                const matchConso = bodyText.match(/Total\s+([A-Za-zéû]+)\s+(\d{4})[\s\S]{0,50}?([0-9]+[.,][0-9]{2})\s*€/i);
-                if (matchConso) {
-                  pageTotalConso = {
-                    mois: matchConso[1],
-                    annee: matchConso[2],
-                    montantEur: parseFloat(matchConso[3].replace(",", ".")),
-                    montantFormate: `${matchConso[3].replace(".", ",")} €`
-                  };
-                }
-                const matchKwh = bodyText.match(/Total\s+([A-Za-zéû]+)\s+(\d{4})[\s\S]{0,50}?([0-9\s]+[.,][0-9]{1,2})\s*kWh/i);
-                if (matchKwh) {
-                  const rawVal = parseFloat(matchKwh[3].replace(/\s+/g, "").replace(",", "."));
-                  if (!isNaN(rawVal) && rawVal > 0) {
-                    if (!pageTotalConso) {
-                      pageTotalConso = {
-                        mois: matchKwh[1],
-                        annee: matchKwh[2]
-                      };
+                const isSuiviConsoPage = /\/suivi-conso(\/|$)/.test(window.location.pathname);
+                if (isSuiviConsoPage) {
+                  const bodyText = document.body?.innerText || "";
+                  const matchConso = bodyText.match(/Total\s+([A-Za-zéû]+)\s+(\d{4})[\s\S]{0,50}?([0-9]+[.,][0-9]{2})\s*€/i);
+                  if (matchConso) {
+                    pageTotalConso = {
+                      mois: matchConso[1],
+                      annee: matchConso[2],
+                      montantEur: parseFloat(matchConso[3].replace(",", ".")),
+                      montantFormate: `${matchConso[3].replace(".", ",")} €`
+                    };
+                  }
+                  const matchKwh = bodyText.match(/Total\s+([A-Za-zéû]+)\s+(\d{4})[\s\S]{0,50}?([0-9\s]+[.,][0-9]{1,2})\s*kWh/i);
+                  if (matchKwh) {
+                    const rawVal = parseFloat(matchKwh[3].replace(/\s+/g, "").replace(",", "."));
+                    if (!isNaN(rawVal) && rawVal > 0) {
+                      if (!pageTotalConso) {
+                        pageTotalConso = {
+                          mois: matchKwh[1],
+                          annee: matchKwh[2]
+                        };
+                      }
+                      pageTotalConso.kwh = rawVal;
+                      pageTotalConso.kwhFormate = `${matchKwh[3].trim()} kWh`;
                     }
-                    pageTotalConso.kwh = rawVal;
-                    pageTotalConso.kwhFormate = `${matchKwh[3].trim()} kWh`;
                   }
                 }
               } catch (_) {}
@@ -3477,14 +3483,33 @@ document.addEventListener("DOMContentLoaded", () => {
   function renderConsoDetails(conso) {
     if (!consoCard) return;
 
+    const isCommunicant = !!(currentContract && currentContract.linky === "Oui" && currentContract.prm && currentContract.prm !== "-");
+    const WARNING_NO_DATA = "Aucun relevé de consommation reçu. Ce compteur est communicant : vérifier que le client a bien coché les autorisations de collecte de ses données par Enedis (rubrique autorisations de son espace Enedis), puis relancer la synchronisation.";
+    const WARNING_PENDING = "Pas encore de relevé pour le mois en cours. Ce compteur est communicant : vérifier que le client a bien coché les autorisations de collecte de ses données par Enedis, puis relancer la synchronisation.";
+
+    function toggleEnedisWarning(show, text) {
+      if (!consoEnedisWarning) return;
+      if (show) {
+        if (consoEnedisWarningText) consoEnedisWarningText.textContent = text;
+        consoEnedisWarning.classList.remove("hidden");
+      } else {
+        consoEnedisWarning.classList.add("hidden");
+      }
+    }
+
     if (!conso || !conso.hasData) {
       if (consoMoisEnCoursBox) consoMoisEnCoursBox.classList.add("hidden");
       if (consoMoisPrecedentsSection) consoMoisPrecedentsSection.classList.add("hidden");
       if (consoTotalBox) consoTotalBox.classList.add("hidden");
+      toggleEnedisWarning(isCommunicant, WARNING_NO_DATA);
       if (consoEmptyMessage) {
-        consoEmptyMessage.classList.remove("hidden");
-        const msgSpan = consoEmptyMessage.querySelector("span");
-        if (msgSpan && conso?.message) msgSpan.textContent = conso.message;
+        if (isCommunicant) {
+          consoEmptyMessage.classList.add("hidden");
+        } else {
+          consoEmptyMessage.classList.remove("hidden");
+          const msgSpan = consoEmptyMessage.querySelector("span");
+          if (msgSpan && conso?.message) msgSpan.textContent = conso.message;
+        }
       }
       if (badgeConsoStatus) {
         badgeConsoStatus.textContent = "Non synchronisé";
@@ -3494,11 +3519,31 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (badgeConsoStatus) {
-      badgeConsoStatus.textContent = "Linky Actif";
-      badgeConsoStatus.className = "badge badge-success";
+      if (conso.currentMonthPending) {
+        badgeConsoStatus.textContent = "Relevé en attente";
+        badgeConsoStatus.className = "badge badge-warning";
+      } else {
+        badgeConsoStatus.textContent = "Linky Actif";
+        badgeConsoStatus.className = "badge badge-success";
+      }
     }
 
     if (consoEmptyMessage) consoEmptyMessage.classList.add("hidden");
+    toggleEnedisWarning(conso.currentMonthPending && isCommunicant, WARNING_PENDING);
+
+    // Rien dans l'onglet Mois (mois en cours absent) : on n'affiche aucune consommation,
+    // ni les mois précédents ni le total cumulé.
+    if (conso.currentMonthPending) {
+      if (consoMoisEnCoursBox) consoMoisEnCoursBox.classList.add("hidden");
+      if (consoMoisPrecedentsSection) consoMoisPrecedentsSection.classList.add("hidden");
+      if (consoTotalBox) consoTotalBox.classList.add("hidden");
+      if (consoEmptyMessage && !isCommunicant) {
+        consoEmptyMessage.classList.remove("hidden");
+        const msgSpan = consoEmptyMessage.querySelector("span");
+        if (msgSpan) msgSpan.textContent = "Relevés de consommation en attente de synchronisation.";
+      }
+      return;
+    }
 
     function getHcRatioBadgeHtml(hp, hc) {
       if (!hp || !hc) return "";

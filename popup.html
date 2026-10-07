@@ -125,6 +125,12 @@
         </div>
 
         <div id="consoContentBody" class="conso-content-body">
+          <!-- Avertissement Enedis (compteur communicant sans relevé) -->
+          <div id="consoEnedisWarning" class="conso-warning hidden">
+            <span class="conso-warning-icon">⚠️</span>
+            <span id="consoEnedisWarningText" class="conso-warning-text">Aucun relevé reçu. Ce compteur est communicant : vérifier que le client a bien coché les autorisations de collecte de ses données par Enedis, puis relancer la synchronisation.</span>
+          </div>
+
           <!-- Encart Mois en cours -->
           <div id="consoMoisEnCoursBox" class="conso-current-box">
             <div class="conso-current-top">

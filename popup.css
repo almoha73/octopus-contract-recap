@@ -742,6 +742,29 @@ body {
   border-radius: var(--radius-sm);
 }
 
+/* Avertissement compteur communicant sans relevé */
+.conso-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(236, 130, 67, 0.12);
+  border: 1px solid rgba(236, 130, 67, 0.40);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  line-height: 1.4;
+  color: #FFA26B;
+}
+
+.conso-warning-icon {
+  flex: 0 0 auto;
+  line-height: 1.4;
+}
+
+.conso-warning-text {
+  flex: 1 1 auto;
+}
+
 /* Total cumulé (12 mois) */
 .conso-total-box {
   background: linear-gradient(135deg, rgba(0, 240, 255, 0.08) 0%, rgba(255, 0, 102, 0.08) 100%);
@@ -2373,6 +2396,12 @@ body.mode-fullscreen #fullscreenBtn {
 
 [data-theme="light"] .conso-empty-state {
   background: rgba(24, 0, 72, 0.03);
+}
+
+[data-theme="light"] .conso-warning {
+  background: rgba(236, 130, 67, 0.14);
+  border-color: rgba(236, 130, 67, 0.40);
+  color: #B85A1B;
 }
 
 [data-theme="light"] .conso-total-box {
