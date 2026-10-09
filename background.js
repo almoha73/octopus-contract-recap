@@ -553,15 +553,17 @@ async function triggerPreloadForTab(tabId, url) {
 // Écouteurs d'onglets pour le préchargement proactif
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = changeInfo.url || tab?.url;
-  if (url && (changeInfo.status === "complete" || changeInfo.url)) {
-    triggerPreloadForTab(tabId, url);
+  if (url && (url.includes("oefr-kraken.energy") || url.includes("octopusenergy.fr"))) {
+    if (changeInfo.status === "complete" || changeInfo.url) {
+      triggerPreloadForTab(tabId, url);
+    }
   }
 });
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   try {
     const tab = await chrome.tabs.get(activeInfo.tabId);
-    if (tab?.url) {
+    if (tab?.url && (tab.url.includes("oefr-kraken.energy") || tab.url.includes("octopusenergy.fr"))) {
       triggerPreloadForTab(activeInfo.tabId, tab.url);
     }
   } catch (_) {}
@@ -569,7 +571,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 
 // Préchargement proactif immédiat au démarrage du Service Worker
 chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-  if (tab?.url) {
+  if (tab?.url && (tab.url.includes("oefr-kraken.energy") || tab.url.includes("octopusenergy.fr"))) {
     triggerPreloadForTab(tab.id, tab.url);
   }
 }).catch(() => {});
