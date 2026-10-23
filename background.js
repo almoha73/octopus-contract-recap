@@ -3,14 +3,80 @@
  * Conforme Manifest V3 et politiques d'entreprise strictes.
  */
 
-// Clic sur l'icône de l'extension : ouvrir directement en plein écran dans un onglet adjacent
-chrome.action.onClicked.addListener(async (tab) => {
+// Configuration du volet latéral natif Chrome (ouverture au clic sur l'icône de l'extension)
+if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((err) => {
+    console.warn("[Background] Info setPanelBehavior :", err.message);
+  });
+}
+
+// Injection automatique du bouton dans les onglets Kraken déjà ouverts lors du rechargement de l'extension
+async function injectLauncherIntoOpenKrakenTabs() {
+  try {
+    const tabs = await chrome.tabs.query({ url: "https://support.oefr-kraken.energy/*" });
+    for (const tab of tabs) {
+      if (!tab.id || !tab.url) continue;
+      if (tab.url.includes("/emails/") || tab.url.includes("/partial/")) continue;
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        files: ["kraken-launcher.js"]
+      }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  injectLauncherIntoOpenKrakenTabs();
+});
+injectLauncherIntoOpenKrakenTabs();
+
+// Suivi de l'état d'ouverture du volet latéral pour masquer automatiquement le bouton sur Kraken quand le volet est ouvert
+let activeSidePanelPorts = 0;
+chrome.storage.local.set({ sidepanel_is_open: false }).catch(() => {});
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.sender?.id !== chrome.runtime.id) return;
+  if (port.name === "octopus-sidepanel") {
+    activeSidePanelPorts++;
+    chrome.storage.local.set({ sidepanel_is_open: true }).catch(() => {});
+    port.onDisconnect.addListener(() => {
+      activeSidePanelPorts = Math.max(0, activeSidePanelPorts - 1);
+      if (activeSidePanelPorts === 0) {
+        chrome.storage.local.set({ sidepanel_is_open: false }).catch(() => {});
+      }
+    });
+  }
+});
+
+// Clic sur l'icône de l'extension : ouvrir le volet latéral (ou repli en onglet si sidePanel non supporté)
+chrome.action.onClicked.addListener((tab) => {
   try {
     let account = null;
     if (tab?.url) {
       const m = tab.url.match(/(?:accounts|comptes)\/(A-[A-Z0-9]+)/i);
       if (m) account = m[1];
     }
+    if (tab?.id) {
+      chrome.storage.local.set({
+        sidepanel_target_context: {
+          tabId: tab.id,
+          windowId: tab.windowId,
+          account: account,
+          updatedAt: Date.now()
+        }
+      }).catch(() => {});
+    }
+
+    if (chrome.sidePanel && chrome.sidePanel.open) {
+      const openOpts = tab?.id ? { tabId: tab.id } : { windowId: tab?.windowId };
+      chrome.sidePanel.open(openOpts).catch(() => {
+        if (tab?.windowId) {
+          chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+        }
+      });
+      return;
+    }
+
     const tabIdParam = tab?.id ? `&tabId=${tab.id}` : "";
     const accParam = account ? `&account=${account}` : "";
     const createOpts = {
@@ -19,9 +85,9 @@ chrome.action.onClicked.addListener(async (tab) => {
     if (tab?.index !== undefined) {
       createOpts.index = tab.index + 1;
     }
-    await chrome.tabs.create(createOpts);
+    chrome.tabs.create(createOpts);
   } catch (err) {
-    console.warn("[Background] Erreur ouverture plein écran :", err.message);
+    console.warn("[Background] Erreur ouverture :", err.message);
   }
 });
 
@@ -30,6 +96,68 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Vérification stricte de l'origine : le message doit provenir de notre propre extension
   if (sender.id !== chrome.runtime.id) {
     return;
+  }
+
+  // Ouverture du volet latéral depuis le bouton intégré sur la page Kraken / Espace Client
+  if (message.type === "OPEN_SIDE_PANEL") {
+    const tabId = sender.tab?.id;
+    const windowId = sender.tab?.windowId;
+    const account = message.payload?.account || extractAccountFromUrl(sender.tab?.url || message.payload?.url);
+
+    // 1. Appel SYNCHRONE immédiat à chrome.sidePanel.open pour préserver le geste utilisateur (user gesture)
+    let sidePanelPromise = null;
+    if (chrome.sidePanel && chrome.sidePanel.open) {
+      if (tabId) {
+        sidePanelPromise = chrome.sidePanel.open({ tabId }).catch(() => {
+          if (windowId) return chrome.sidePanel.open({ windowId });
+          throw new Error("Impossible d'ouvrir le sidePanel");
+        });
+      } else if (windowId) {
+        sidePanelPromise = chrome.sidePanel.open({ windowId });
+      }
+    }
+
+    // 2. Sauvegarder le contexte cible pour que le volet latéral affiche immédiatement ce compte
+    chrome.storage.local.set({
+      sidepanel_target_context: {
+        tabId: tabId || null,
+        windowId: windowId || null,
+        account: account || null,
+        updatedAt: Date.now()
+      }
+    }).catch(() => {});
+
+    if (sidePanelPromise) {
+      sidePanelPromise
+        .then(() => sendResponse({ success: true, mode: "sidePanel" }))
+        .catch(() => {
+          // Repli en fenêtre compagnon latérale si sidePanel échoue
+          const tabIdParam = tabId ? `&tabId=${tabId}` : "";
+          const accParam = account ? `&account=${account}` : "";
+          chrome.windows.create({
+            url: chrome.runtime.getURL(`popup.html?mode=window${tabIdParam}${accParam}`),
+            type: "popup",
+            width: 460,
+            height: 850,
+            focused: true
+          }).then(() => sendResponse({ success: true, mode: "window" }))
+            .catch((e) => sendResponse({ success: false, error: e.message }));
+        });
+      return true;
+    }
+
+    // Repli si chrome.sidePanel n'est pas disponible sur ce navigateur
+    const tabIdParam = tabId ? `&tabId=${tabId}` : "";
+    const accParam = account ? `&account=${account}` : "";
+    chrome.windows.create({
+      url: chrome.runtime.getURL(`popup.html?mode=window${tabIdParam}${accParam}`),
+      type: "popup",
+      width: 460,
+      height: 850,
+      focused: true
+    }).then(() => sendResponse({ success: true, mode: "window" }))
+      .catch((e) => sendResponse({ success: false, error: e.message }));
+    return true;
   }
 
   if (message.type === "FETCH_CONTRACT_DATA") {
@@ -49,20 +177,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Récupération dédiée du suivi de consommation mensuel
   if (message.type === "FETCH_CONSO_DATA") {
-    const { accountNumber, prmId, propertyId, contract, propertyIds, propertyMapping, tabId, forceSync } = message.payload || {};
+    const { accountNumber, prmId, propertyId, contract, prmContracts, propertyIds, propertyMapping, tabId, forceSync, includeOlderMonths } = message.payload || {};
     (async () => {
       // Le suivi conso est calculé par PRM (compteur), sur l'union des périodes de ses contrats
-      let group = contract ? [contract] : [];
+      let group = Array.isArray(prmContracts) && prmContracts.length > 0
+        ? [...prmContracts]
+        : (contract ? [contract] : []);
       try {
         const cached = await getCachedAccount(accountNumber);
         if (Array.isArray(cached)) {
           const siblings = cached.filter(c => String(c.prm) === String(prmId));
-          if (siblings.length > 0) group = siblings;
+          if (siblings.length > 0) {
+            const byId = new Map();
+            for (const s of siblings) if (s && s.id) byId.set(String(s.id), s);
+            for (const g of group) if (g && g.id) byId.set(String(g.id), g);
+            group = byId.size > 0 ? [...byId.values()] : siblings;
+          }
         }
       } catch (_) {}
 
       const mergedContract = buildPrmValidityContract(group, contract) || contract;
-      const data = await fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, mergedContract, propertyMapping, propertyIds, tabId, forceSync);
+      const data = await fetchMonthlyConsumptionData(
+        accountNumber,
+        prmId,
+        propertyId,
+        mergedContract,
+        propertyMapping,
+        propertyIds,
+        tabId,
+        forceSync,
+        Boolean(includeOlderMonths)
+      );
 
       if (accountNumber && data && data.hasData) {
         try {
@@ -152,7 +297,7 @@ const ACCOUNT_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes de validité
 const preloadCooldowns = new Map(); // accountNumber -> timestamp du dernier préchargement
 const activePreloadLocks = new Set(); // accountNumber en cours de préchargement
 
-const CACHE_VERSION = 13; // v13 : suivi conso calculé par PRM (partagé entre offres) + statuts changement d'offre / non activé
+const CACHE_VERSION = 16; // v16 : correction formatage plages HC saisonnières (préservation des dates JJ/MM)
 
 /**
  * Récupère les données en cache local pour un compte si elles sont encore valides
@@ -550,38 +695,15 @@ async function triggerPreloadForTab(tabId, url) {
   }
 }
 
-// Écouteurs d'onglets pour le préchargement proactif
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  const url = changeInfo.url || tab?.url;
-  if (url && (url.includes("oefr-kraken.energy") || url.includes("octopusenergy.fr"))) {
-    if (changeInfo.status === "complete" || changeInfo.url) {
-      triggerPreloadForTab(tabId, url);
-    }
-  }
-});
-
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
-  try {
-    const tab = await chrome.tabs.get(activeInfo.tabId);
-    if (tab?.url && (tab.url.includes("oefr-kraken.energy") || tab.url.includes("octopusenergy.fr"))) {
-      triggerPreloadForTab(activeInfo.tabId, tab.url);
-    }
-  } catch (_) {}
-});
-
-// Préchargement proactif immédiat au démarrage du Service Worker
-chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-  if (tab?.url && (tab.url.includes("oefr-kraken.energy") || tab.url.includes("octopusenergy.fr"))) {
-    triggerPreloadForTab(tab.id, tab.url);
-  }
-}).catch(() => {});
+// Note : Le préchargement automatique à chaque navigation d'onglet est désactivé
+// pour garantir une exécution ultra-légère uniquement à la demande de l'utilisateur.
 
 /**
  * Récupère les données complètes du contrat :
  * 1. Vérifie le cache local si bypassCache n'est pas actif
  * 2. Tente l'interrogation GraphQL directement avec les cookies existants
  * 3. Si la session n'est pas encore initialisée, synchronise silencieusement via masquerade
- * 4. Met en cache le résultat pour restitution instantanée
+ * 4. Met en cache le résultat pour restitution instantanée (sans lancer le suivi conso tant que non demandé)
  */
 async function handleFetchContractData(payload) {
   const { 
@@ -619,19 +741,10 @@ async function handleFetchContractData(payload) {
     ? agreementIds 
     : (agreementId ? [agreementId] : [null]);
 
-  // Étape 1 : Tentative directe ultra-rapide avec les cookies de session actuels
+  // Étape 1 : Tentative directe ultra-rapide avec les cookies de session actuels (uniquement le contrat)
   const result = await executeAgreementsQuery(accountNumber, idsToQuery);
   if (result.contracts && result.contracts.length > 0) {
-    // RESTITUTION INSTANTANÉE : sauvegarder et retourner les contrats immédiatement (~200ms)
     await saveAccountToCache(accountNumber, result.contracts, propertyMapping, propertyIds);
-
-    // Lancement de l'enrichissement conso en tâche de fond (sans bloquer l'affichage de l'interface)
-    enrichContractsWithConso(result.contracts, accountNumber, propertyMapping, propertyIds)
-      .then(async (enriched) => {
-        await saveAccountToCache(accountNumber, enriched, propertyMapping, propertyIds);
-      })
-      .catch((e) => console.warn("[Background] Erreur conso arrière-plan :", e.message));
-
     return result.contracts;
   }
 
@@ -641,15 +754,8 @@ async function handleFetchContractData(payload) {
     console.log("[Background] Session requise, exécution de performBackgroundSync...");
     try {
       const syncedContracts = await performBackgroundSync(tabId, accountNumber, idsToQuery, propertyMapping, propertyIds);
-      if (syncedContracts && syncedContracts.length > 0) {
+      if (Array.isArray(syncedContracts) && syncedContracts.length > 0) {
         await saveAccountToCache(accountNumber, syncedContracts, propertyMapping, propertyIds);
-
-        enrichContractsWithConso(syncedContracts, accountNumber, propertyMapping, propertyIds)
-          .then(async (enriched) => {
-            await saveAccountToCache(accountNumber, enriched, propertyMapping, propertyIds);
-          })
-          .catch((e) => console.warn("[Background] Erreur conso arrière-plan :", e.message));
-
         return syncedContracts;
       }
     } catch (syncErr) {
@@ -994,7 +1100,7 @@ async function performBackgroundSync(tabId, accountNumber, idsToQuery, propertyM
     } catch (_) {}
 
     // 7. Requête GraphQL avec les cookies maintenant actifs (si des contrats étaient demandés)
-    if (idsToQuery && idsToQuery.length > 0 && idsToQuery[0] !== null) {
+    if (Array.isArray(idsToQuery)) {
       const result = await executeAgreementsQuery(accountNumber, idsToQuery);
       if (result.contracts && result.contracts.length > 0) {
         return result.contracts;
@@ -1223,13 +1329,16 @@ async function queryAgreementsFromKraken(accountNumber, agreementId) {
  */
 /**
  * Nettoie et formate une chaîne de plages horaires (ex: "23:00 - 07:00" -> "23h00 - 07h00")
+ * tout en préservant les barres obliques des dates saisonnières (ex: "Du 01/11 au 31/03 : ...")
  */
 function cleanScheduleString(str) {
   if (!str || typeof str !== "string") return null;
   let s = str.trim();
   s = s.replace(/(\d{1,2}):(\d{2})/g, "$1h$2");
   s = s.replace(/\s*[-–]\s*/g, " - ");
-  s = s.replace(/\s*[,/]\s*/g, ", ");
+  // Remplacer les séparateurs "," ou " / " (avec espaces ou entre horaires), sans jamais altérer les dates JJ/MM
+  s = s.replace(/\s*,\s*/g, ", ");
+  s = s.replace(/\s+\/\s+/g, ", ");
   return s;
 }
 
@@ -1580,12 +1689,16 @@ function buildPrmValidityContract(group, fallback) {
   const rep = pickPrmRepresentative(group, fallback) || fallback;
   if (!rep) return null;
 
+  const list = Array.isArray(group) ? group : [];
+  const validCandidates = list.filter(c => c && !c.isNeverActivated && c.statut !== "Non activé" && c.statut !== "Annulé");
+  const pool = validCandidates.length > 0 ? validCandidates : list;
+
   let minFrom = null;
   let maxTo = null;
   let hasOpenEnd = false;
   let hasFrom = false;
 
-  for (const c of (Array.isArray(group) ? group : [])) {
+  for (const c of pool) {
     const f = c.rawValidFrom ? new Date(c.rawValidFrom) : null;
     if (f && !isNaN(f.getTime())) {
       hasFrom = true;
@@ -1657,24 +1770,33 @@ function getContractValidity(contract) {
   let startYearMonth = null;
   let endYearMonth = null;
 
-  if (contract?.rawValidFrom) {
-    const d = new Date(contract.rawValidFrom);
-    if (!isNaN(d.getTime())) {
-      startDate = d;
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      startYearMonth = `${y}-${m}`;
+  const parseDateValue = (rawIso, rawFr) => {
+    if (rawIso) {
+      const d = new Date(rawIso);
+      if (!isNaN(d.getTime())) return d;
     }
+    if (rawFr && typeof rawFr === "string" && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(rawFr.trim())) {
+      const [day, month, year] = rawFr.trim().split("/").map(Number);
+      const d = new Date(year, month - 1, day, 12, 0, 0);
+      if (!isNaN(d.getTime())) return d;
+    }
+    return null;
+  };
+
+  const dStart = parseDateValue(contract?.rawValidFrom, contract?.dateDebut);
+  if (dStart) {
+    startDate = dStart;
+    const y = dStart.getFullYear();
+    const m = String(dStart.getMonth() + 1).padStart(2, "0");
+    startYearMonth = `${y}-${m}`;
   }
 
-  if (contract?.rawValidTo) {
-    const d = new Date(contract.rawValidTo);
-    if (!isNaN(d.getTime())) {
-      endDate = d;
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      endYearMonth = `${y}-${m}`;
-    }
+  const dEnd = parseDateValue(contract?.rawValidTo, contract?.dateFin);
+  if (dEnd) {
+    endDate = dEnd;
+    const y = dEnd.getFullYear();
+    const m = String(dEnd.getMonth() + 1).padStart(2, "0");
+    endYearMonth = `${y}-${m}`;
   }
 
   return { startDate, endDate, startYearMonth, endYearMonth };
@@ -1712,15 +1834,15 @@ function formatMonthBoundaries(year, monthIndex) {
 }
 
 /**
- * Génère les plages de dates pour les N derniers mois calendaires (mois en cours inclus, 12 mois par défaut)
- * Filtre strictement les mois antérieurs au début du contrat ou postérieurs à sa fin
+ * Génère l'intégralité des mois calendaires éligibles depuis le début du contrat (jusqu'à maxMonths, 60 mois = 5 ans par défaut)
  */
-function generateMonthRanges(count = 12, contract = null) {
+function getAllEligibleMonthRanges(contract = null, maxMonths = 60) {
   const ranges = [];
   const now = new Date();
   const { startYearMonth, endYearMonth } = getContractValidity(contract);
+  const effectiveMax = startYearMonth ? maxMonths : 24;
 
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < effectiveMax; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const bounds = formatMonthBoundaries(d.getFullYear(), d.getMonth());
 
@@ -1730,7 +1852,7 @@ function generateMonthRanges(count = 12, contract = null) {
     }
     // Si le mois est strictement antérieur au début du contrat (ex: novembre 2025 pour une arrivée le 12 décembre)
     if (startYearMonth && bounds.yearMonth < startYearMonth) {
-      continue;
+      break;
     }
 
     ranges.push(bounds);
@@ -1742,6 +1864,50 @@ function generateMonthRanges(count = 12, contract = null) {
   }
 
   return ranges;
+}
+
+/**
+ * Génère les plages de dates pour les N derniers mois calendaires (mois en cours inclus, 12 mois par défaut)
+ * Filtre strictement les mois antérieurs au début du contrat ou postérieurs à sa fin
+ */
+function generateMonthRanges(count = 12, contract = null) {
+  return getAllEligibleMonthRanges(contract, Math.max(count, 60)).slice(0, count);
+}
+
+/**
+ * Calcule les métadonnées indiquant si le client possède un historique au-delà des 12 derniers mois
+ * ainsi que l'éligibilité pour l'année passée (N-1)
+ */
+function computeOlderMonthsMetadata(contract, includeOlderMonths = false, validMonths = []) {
+  const allEligible = getAllEligibleMonthRanges(contract, 60);
+  const hasOlderMonths = allEligible.length > 12 || validMonths.length > 12;
+  const olderMonthsCount = allEligible.length > 12
+    ? (allEligible.length - 12)
+    : Math.max(0, validMonths.length - 12);
+  let oldestEligibleLabel = null;
+  if (allEligible.length > 12) {
+    const oldest = allEligible[allEligible.length - 1];
+    const [yStr, mStr] = oldest.yearMonth.split("-");
+    const d = new Date(parseInt(yStr, 10), parseInt(mStr, 10) - 1, 1);
+    oldestEligibleLabel = d.toLocaleDateString("fr-FR", { month: "short", year: "numeric" });
+  }
+
+  const now = new Date();
+  const lastYearPrefix = `${now.getFullYear() - 1}-`;
+  const recent12Set = new Set(allEligible.slice(0, 12).map(r => r.yearMonth));
+  const lastYearEligible = allEligible.filter(r => r.yearMonth.startsWith(lastYearPrefix));
+  const hasLastYearEligible = lastYearEligible.length > 0 || validMonths.some(m => m.yearMonth && m.yearMonth.startsWith(lastYearPrefix));
+  const needsOlderFetchForLastYear = lastYearEligible.some(r => !recent12Set.has(r.yearMonth));
+
+  return {
+    hasOlderMonths,
+    olderMonthsCount,
+    olderMonthsLoaded: Boolean(includeOlderMonths),
+    showOlderMonths: Boolean(includeOlderMonths),
+    oldestEligibleLabel,
+    hasLastYearEligible,
+    needsOlderFetchForLastYear
+  };
 }
 
 /**
@@ -1983,15 +2149,17 @@ function parsePropertyMeasurementsMonth(edges, range, contract = null) {
 }
 
 /**
- * Interroge l'API GetPropertyMeasurements pour un propertyId et un PRM donnés sur les 12 derniers mois
+ * Interroge l'API GetPropertyMeasurements pour un propertyId et un PRM donnés
+ * (sur les 12 derniers mois par défaut, ou sur l'intégralité du contrat si includeOlderMonths est actif)
  */
-async function fetchMeasurementsByProperty(propertyId, prmId, contract = null) {
+async function fetchMeasurementsByProperty(propertyId, prmId, contract = null, includeOlderMonths = false) {
   if (!propertyId || !prmId) return null;
 
-  const ranges = generateMonthRanges(12, contract);
-  console.log(`[Background] Requête GetPropertyMeasurements pour propertyId=${propertyId}, PRM=${prmId} sur ${ranges.length} mois éligibles...`);
+  const allEligibleRanges = getAllEligibleMonthRanges(contract, 60);
+  const ranges = includeOlderMonths ? allEligibleRanges : allEligibleRanges.slice(0, 12);
+  console.log(`[Background] Requête GetPropertyMeasurements pour propertyId=${propertyId}, PRM=${prmId} sur ${ranges.length}/${allEligibleRanges.length} mois éligibles (older=${includeOlderMonths})...`);
 
-  const promises = ranges.map(async (range) => {
+  const fetchSingleRange = async (range) => {
     try {
       const isGas = contract?.typeEnergie === "Gaz";
       const filterObj = isGas
@@ -2051,9 +2219,17 @@ async function fetchMeasurementsByProperty(propertyId, prmId, contract = null) {
       console.warn(`[Background] Exception mesure mois ${range.yearMonth} :`, err.message);
       return null;
     }
-  });
+  };
 
-  const results = await Promise.all(promises);
+  // Exécution par lots de 12 mois en parallèle pour préserver la fluidité réseau même sur 3-5 ans d'historique
+  const BATCH_SIZE = 12;
+  const results = [];
+  for (let i = 0; i < ranges.length; i += BATCH_SIZE) {
+    const batch = ranges.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.all(batch.map(fetchSingleRange));
+    results.push(...batchResults);
+  }
+
   const { startYearMonth, endYearMonth } = getContractValidity(contract);
   const validMonths = results.filter(m => {
     if (!m) return false;
@@ -2089,7 +2265,7 @@ async function fetchMeasurementsByProperty(propertyId, prmId, contract = null) {
     });
   }
 
-  // Calcul du total cumulé et de la moyenne sur l'ensemble des mois affichés (12 mois max)
+  // Calcul du total cumulé et de la moyenne sur l'ensemble des mois chargés
   const allMonths = [moisEnCours, ...moisPrecedents].filter(Boolean);
   const totalKwh = Math.round(allMonths.reduce((sum, m) => sum + (m.kwh || 0), 0) * 100) / 100;
   const totalCost = Math.round(allMonths.reduce((sum, m) => sum + (m.costEur || 0), 0) * 100) / 100;
@@ -2098,6 +2274,7 @@ async function fetchMeasurementsByProperty(propertyId, prmId, contract = null) {
   const nbMonths = allMonths.length;
   const moyenneKwh = nbMonths > 0 ? Math.round((totalKwh / nbMonths) * 100) / 100 : 0;
   const moyenneCost = nbMonths > 0 && totalCost > 0 ? Math.round((totalCost / nbMonths) * 100) / 100 : null;
+  const olderMeta = computeOlderMonthsMetadata(contract, includeOlderMonths, validMonths);
 
   console.log(`[Background] GetPropertyMeasurements succès (${validMonths.length} mois, en cours : ${moisEnCours?.label} ${moisEnCours?.costFormate}, total : ${totalKwh} kWh / ${totalCost} €, moy : ${moyenneKwh} kWh/m / ${moyenneCost} €/m)`);
 
@@ -2119,6 +2296,7 @@ async function fetchMeasurementsByProperty(propertyId, prmId, contract = null) {
     moyenneKwhFormate: `${formatKwhValue(moyenneKwh)}/mois`,
     moyenneCostEur: moyenneCost,
     moyenneCostFormate: moyenneCost > 0 ? `${moyenneCost.toFixed(2).replace(".", ",")} €/mois` : "-",
+    ...olderMeta,
     source: "graphql_property_measurements"
   };
 }
@@ -2632,7 +2810,7 @@ async function enrichContractsWithConso(contracts, accountNumber, propertyMappin
 /**
  * Récupère le suivi de consommation pour un PRM spécifique
  */
-async function fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, contract = null, propertyMapping = [], propertyIds = [], tabId = null, forceSync = false) {
+async function fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, contract = null, propertyMapping = [], propertyIds = [], tabId = null, forceSync = false, includeOlderMonths = false) {
   if (!accountNumber || !prmId || prmId === "-") {
     return {
       hasData: false,
@@ -2640,7 +2818,7 @@ async function fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, con
     };
   }
 
-  console.log(`[Background] Récupération suivi conso pour compte ${accountNumber}, PRM ${prmId}, propertyId initial ${propertyId}...`);
+  console.log(`[Background] Récupération suivi conso pour compte ${accountNumber}, PRM ${prmId}, propertyId initial ${propertyId} (includeOlderMonths=${includeOlderMonths})...`);
 
   // 1. Déterminer un onglet Kraken support valide pour masquerade
   let krakenTabId = null;
@@ -2739,7 +2917,7 @@ async function fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, con
   const tryGetPropertyMeasurements = async (pid) => {
     if (!pid) return null;
     try {
-      return await fetchMeasurementsByProperty(pid, prmId, contract);
+      return await fetchMeasurementsByProperty(pid, prmId, contract, includeOlderMonths);
     } catch (pErr) {
       if (pErr.message && (pErr.message.includes("AUTH") || pErr.message.includes("401") || pErr.message.includes("403"))) {
         authErrorOccurred = true;
@@ -2825,9 +3003,9 @@ async function fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, con
   }
 
   // 5. Repli sur les relevés Linky GraphQL Relay
-  const readingNodes = await fetchAllElectricityReadingsForPrm(accountNumber, prmId);
+  const readingNodes = await fetchAllElectricityReadingsForPrm(accountNumber, prmId, includeOlderMonths);
   if (readingNodes && readingNodes.length > 0) {
-    const aggregated = aggregateReadingsByMonth(readingNodes, contract);
+    const aggregated = aggregateReadingsByMonth(readingNodes, contract, includeOlderMonths);
     if (aggregated && aggregated.hasData) {
       if (propertyId) aggregated.propertyId = propertyId;
       console.log(`[Background] Suivi conso obtenu via Relay pour PRM ${prmId} (${aggregated.totalMoisDisponibles} mois).`);
@@ -2837,7 +3015,7 @@ async function fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, con
 
   // 6. Repli sur la page Next.js suivi-conso
   if (propertyId) {
-    const pageData = await fetchSuiviConsoPageData(accountNumber, propertyId, contract);
+    const pageData = await fetchSuiviConsoPageData(accountNumber, propertyId, contract, includeOlderMonths);
     if (pageData && pageData.hasData) {
       pageData.propertyId = propertyId;
       return pageData;
@@ -2853,67 +3031,68 @@ async function fetchMonthlyConsumptionData(accountNumber, prmId, propertyId, con
 
 /**
  * Récupère tous les relevés Linky pour un PRM donné via GraphQL Relay
- * Réalise la pagination (Page 1 puis Page 2 avec curseur) pour garantir que
- * le mois en cours (Septembre) et les mois passés (Août, Juillet, Juin...) sont tous inclus.
+ * Réalise la pagination pour garantir que le mois en cours et les mois passés sont tous inclus.
  */
-async function fetchAllElectricityReadingsForPrm(accountNumber, prmId) {
+async function fetchAllElectricityReadingsForPrm(accountNumber, prmId, includeOlderMonths = false) {
   if (!accountNumber || !prmId || prmId === "-") return null;
 
-  // 1. Tenter d'abord avec 'last: 100' (si l'API supporte la sélection des 100 jours les plus récents)
-  const lastQuery = `
-    query GetElectricityReadingsLast($accountNumber: String!, $prmId: String!) {
-      electricityReading(
-        accountNumber: $accountNumber
-        prmId: $prmId
-        last: 100
-        calendarType: PROVIDER
-      ) {
-        edges {
-          node {
-            consumption
-            periodStartAt
-            periodEndAt
-            temporalClass {
-              ... on ProviderTemporalClassType {
-                label
-                code
+  // 1. Tenter d'abord avec 'last: 100' uniquement si on ne demande pas l'historique > 12 mois
+  if (!includeOlderMonths) {
+    const lastQuery = `
+      query GetElectricityReadingsLast($accountNumber: String!, $prmId: String!) {
+        electricityReading(
+          accountNumber: $accountNumber
+          prmId: $prmId
+          last: 100
+          calendarType: PROVIDER
+        ) {
+          edges {
+            node {
+              consumption
+              periodStartAt
+              periodEndAt
+              temporalClass {
+                ... on ProviderTemporalClassType {
+                  label
+                  code
+                }
               }
             }
           }
         }
       }
-    }
-  `;
+    `;
 
-  try {
-    const resLast = await fetch("https://octopusenergy.fr/api/graphql/kraken", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({
-        query: lastQuery,
-        variables: { accountNumber, prmId: String(prmId) },
-        operationName: "GetElectricityReadingsLast"
-      })
-    });
-    if (resLast.ok) {
-      const jsonLast = await resLast.json();
-      const edges = jsonLast?.data?.electricityReading?.edges || [];
-      if (!jsonLast.errors && edges.length > 0) {
-        const nodes = edges.map(e => e?.node).filter(Boolean);
-        const dates = nodes.map(n => n.periodStartAt || n.periodEndAt).filter(Boolean).sort();
-        const latest = dates[dates.length - 1];
-        if (nodes.length > 0) {
-          console.log(`[Background] Relevés récents 'last: 100' validés pour PRM ${prmId} (${nodes.length} nœuds, max: ${latest})`);
-          return nodes;
+    try {
+      const resLast = await fetch("https://octopusenergy.fr/api/graphql/kraken", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          query: lastQuery,
+          variables: { accountNumber, prmId: String(prmId) },
+          operationName: "GetElectricityReadingsLast"
+        })
+      });
+      if (resLast.ok) {
+        const jsonLast = await resLast.json();
+        const edges = jsonLast?.data?.electricityReading?.edges || [];
+        if (!jsonLast.errors && edges.length > 0) {
+          const nodes = edges.map(e => e?.node).filter(Boolean);
+          const dates = nodes.map(n => n.periodStartAt || n.periodEndAt).filter(Boolean).sort();
+          const latest = dates[dates.length - 1];
+          if (nodes.length > 0) {
+            console.log(`[Background] Relevés récents 'last: 100' validés pour PRM ${prmId} (${nodes.length} nœuds, max: ${latest})`);
+            return nodes;
+          }
         }
       }
+    } catch (e) {
+      console.warn("[Background] Erreur test last: 100 :", e.message);
     }
-  } catch (e) {
-    console.warn("[Background] Erreur test last: 100 :", e.message);
   }
 
-  // 2. Pagination Relay complète (Page 1 puis Page 2 avec le curseur de la 100e entrée)
+  // 2. Pagination Relay complète (jusqu'à 10 pages si includeOlderMonths, sinon 2 pages)
   const page1Query = `
     query GetElectricityReadingsP1($accountNumber: String!, $prmId: String!) {
       electricityReading(
@@ -2957,59 +3136,60 @@ async function fetchAllElectricityReadingsForPrm(accountNumber, prmId) {
     if (edges1.length === 0) return null;
 
     const allNodes = edges1.map(e => e?.node).filter(Boolean);
+    const maxPages = includeOlderMonths ? 10 : 2;
+    let lastEdges = edges1;
 
-    // Si on a atteint 100 relevés, on enchaîne sur la page 2 avec le curseur du dernier élément
-    if (edges1.length === 100 && edges1[99]?.cursor) {
-      const endCursor = edges1[99].cursor;
-      const page2Query = `
-        query GetElectricityReadingsP2($accountNumber: String!, $prmId: String!, $after: String!) {
-          electricityReading(
-            accountNumber: $accountNumber
-            prmId: $prmId
-            first: 100
-            after: $after
-            calendarType: PROVIDER
-          ) {
-            edges {
-              cursor
-              node {
-                consumption
-                periodStartAt
-                periodEndAt
-                temporalClass {
-                  ... on ProviderTemporalClassType {
-                    label
-                    code
-                  }
+    const pageNextQuery = `
+      query GetElectricityReadingsP2($accountNumber: String!, $prmId: String!, $after: String!) {
+        electricityReading(
+          accountNumber: $accountNumber
+          prmId: $prmId
+          first: 100
+          after: $after
+          calendarType: PROVIDER
+        ) {
+          edges {
+            cursor
+            node {
+              consumption
+              periodStartAt
+              periodEndAt
+              temporalClass {
+                ... on ProviderTemporalClassType {
+                  label
+                  code
                 }
               }
             }
           }
         }
-      `;
+      }
+    `;
 
+    for (let page = 2; page <= maxPages; page++) {
+      if (lastEdges.length < 100 || !lastEdges[lastEdges.length - 1]?.cursor) break;
+      const endCursor = lastEdges[lastEdges.length - 1].cursor;
       try {
-        const res2 = await fetch("https://octopusenergy.fr/api/graphql/kraken", {
+        const resNext = await fetch("https://octopusenergy.fr/api/graphql/kraken", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
           body: JSON.stringify({
-            query: page2Query,
+            query: pageNextQuery,
             variables: { accountNumber, prmId: String(prmId), after: endCursor },
             operationName: "GetElectricityReadingsP2"
           })
         });
-
-        if (res2.ok) {
-          const json2 = await res2.json();
-          const edges2 = json2?.data?.electricityReading?.edges || [];
-          if (!json2.errors && edges2.length > 0) {
-            allNodes.push(...edges2.map(e => e?.node).filter(Boolean));
-            console.log(`[Background] Page 2 Relay récupérée pour PRM ${prmId} (+${edges2.length} nœuds, total : ${allNodes.length})`);
-          }
-        }
-      } catch (e2) {
-        console.warn(`[Background] Erreur Page 2 Relay pour PRM ${prmId} :`, e2.message);
+        if (!resNext.ok) break;
+        const jsonNext = await resNext.json();
+        const edgesNext = jsonNext?.data?.electricityReading?.edges || [];
+        if (jsonNext.errors || edgesNext.length === 0) break;
+        allNodes.push(...edgesNext.map(e => e?.node).filter(Boolean));
+        lastEdges = edgesNext;
+        console.log(`[Background] Page ${page} Relay récupérée pour PRM ${prmId} (+${edgesNext.length} nœuds, total : ${allNodes.length})`);
+      } catch (eNext) {
+        console.warn(`[Background] Erreur Page ${page} Relay pour PRM ${prmId} :`, eNext.message);
+        break;
       }
     }
 
@@ -3023,7 +3203,7 @@ async function fetchAllElectricityReadingsForPrm(accountNumber, prmId) {
 /**
  * Repli direct depuis la page Next.js de suivi-conso si besoin
  */
-async function fetchSuiviConsoPageData(accountNumber, propertyId, contract = null) {
+async function fetchSuiviConsoPageData(accountNumber, propertyId, contract = null, includeOlderMonths = false) {
   if (!accountNumber || !propertyId) return null;
   try {
     const agreementId = contract?.id;
@@ -3044,7 +3224,7 @@ async function fetchSuiviConsoPageData(accountNumber, propertyId, contract = nul
 
         const nextData = JSON.parse(match[1]);
         const pageProps = nextData?.props?.pageProps;
-        const parsed = parseMonthlyConsumption(pageProps, contract);
+        const parsed = parseMonthlyConsumption(pageProps, contract, includeOlderMonths);
         if (parsed && parsed.hasData) {
           return parsed;
         }
@@ -3059,7 +3239,7 @@ async function fetchSuiviConsoPageData(accountNumber, propertyId, contract = nul
 /**
  * Agrège les relevés par mois calendaire avec gestion fidèle des coûts
  */
-function aggregateReadingsByMonth(readingNodes, contract = null) {
+function aggregateReadingsByMonth(readingNodes, contract = null, includeOlderMonths = false) {
   if (!readingNodes || readingNodes.length === 0) return null;
 
   const byMonth = {};
@@ -3123,8 +3303,11 @@ function aggregateReadingsByMonth(readingNodes, contract = null) {
     }
   }
 
-  const monthsKeys = Object.keys(byMonth).sort().reverse();
+  let monthsKeys = Object.keys(byMonth).sort().reverse();
   if (monthsKeys.length === 0) return null;
+  if (!includeOlderMonths && monthsKeys.length > 12) {
+    monthsKeys = monthsKeys.slice(0, 12);
+  }
 
   let monthlyAbo = 0;
   if (contract && contract.prixAbonnementMoisTTC) {
@@ -3235,6 +3418,7 @@ function aggregateReadingsByMonth(readingNodes, contract = null) {
   const nbMonths = allMonths.length;
   const moyenneKwh = nbMonths > 0 ? Math.round((totalKwh / nbMonths) * 100) / 100 : 0;
   const moyenneCost = nbMonths > 0 && totalCost > 0 ? Math.round((totalCost / nbMonths) * 100) / 100 : null;
+  const olderMeta = computeOlderMonthsMetadata(contract, includeOlderMonths, items);
 
   return {
     hasData: true,
@@ -3253,14 +3437,15 @@ function aggregateReadingsByMonth(readingNodes, contract = null) {
     moyenneKwh: moyenneKwh,
     moyenneKwhFormate: `${formatKwhValue(moyenneKwh)}/mois`,
     moyenneCostEur: moyenneCost,
-    moyenneCostFormate: moyenneCost > 0 ? `${moyenneCost.toFixed(2).replace(".", ",")} €/mois` : "-"
+    moyenneCostFormate: moyenneCost > 0 ? `${moyenneCost.toFixed(2).replace(".", ",")} €/mois` : "-",
+    ...olderMeta
   };
 }
 
 /**
  * Parse l'arbre pageProps de Next.js à la recherche de séries temporelles mensuelles
  */
-function parseMonthlyConsumption(pageProps, contract = null) {
+function parseMonthlyConsumption(pageProps, contract = null, includeOlderMonths = false) {
   if (!pageProps || typeof pageProps !== "object") return null;
 
   const candidateArrays = [];
@@ -3303,6 +3488,9 @@ function parseMonthlyConsumption(pageProps, contract = null) {
   if (bestItems.length === 0) return null;
 
   bestItems.sort((a, b) => b.timestamp - a.timestamp);
+  if (!includeOlderMonths && bestItems.length > 12) {
+    bestItems = bestItems.slice(0, 12);
+  }
 
   const now = new Date();
   const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -3311,6 +3499,7 @@ function parseMonthlyConsumption(pageProps, contract = null) {
   const moisPrecedents = bestItems.filter(item => item !== moisEnCours);
   const currentMonthPending = !moisEnCours;
   const maxKwh = Math.max(...bestItems.map(i => i.kwh || 0), 1);
+  const olderMeta = computeOlderMonthsMetadata(contract, includeOlderMonths, bestItems);
 
   return {
     hasData: true,
@@ -3318,7 +3507,8 @@ function parseMonthlyConsumption(pageProps, contract = null) {
     moisPrecedents,
     currentMonthPending,
     maxKwh,
-    totalMoisDisponibles: bestItems.length
+    totalMoisDisponibles: bestItems.length,
+    ...olderMeta
   };
 }
 

@@ -14,7 +14,25 @@
     "scripting",
     "storage",
     "declarativeNetRequest",
-    "cookies"
+    "cookies",
+    "sidePanel"
+  ],
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://support.oefr-kraken.energy/*"
+      ],
+      "exclude_matches": [
+        "https://support.oefr-kraken.energy/accounts/*/emails/*",
+        "https://support.oefr-kraken.energy/accounts/*/partial/*",
+        "https://support.oefr-kraken.energy/app/accounts/*/emails/*"
+      ],
+      "js": ["kraken-launcher.js"],
+      "run_at": "document_idle"
+    }
   ],
   "host_permissions": [
     "https://support.oefr-kraken.energy/*",

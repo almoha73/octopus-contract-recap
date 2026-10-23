@@ -50,7 +50,7 @@ const GRAPHQL_AGREEMENTS_QUERY = `
   }
 `;
 
-const CACHE_VERSION = 13; // v13 : suivi conso calculé par PRM (partagé entre offres) + statuts changement d'offre / non activé
+const CACHE_VERSION = 16; // v16 : correction formatage plages HC saisonnières (préservation des dates JJ/MM)
 
 document.addEventListener("DOMContentLoaded", () => {
   // Éléments du DOM
@@ -89,6 +89,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Éléments du Suivi Conso Mensuel
   const consoCard = document.getElementById("consoCard");
+  const consoPeriodFilterBar = document.getElementById("consoPeriodFilterBar");
+  const consoFilter12m = document.getElementById("consoFilter12m");
+  const consoFilterCurrentYear = document.getElementById("consoFilterCurrentYear");
+  const consoFilterLastYear = document.getElementById("consoFilterLastYear");
+  const consoFilterAll = document.getElementById("consoFilterAll");
   const consoMoisEnCoursBox = document.getElementById("consoMoisEnCoursBox");
   const consoMoisEnCoursLabel = document.getElementById("consoMoisEnCoursLabel");
   const consoMoisEnCoursKwh = document.getElementById("consoMoisEnCoursKwh");
@@ -96,10 +101,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const consoMoisEnCoursBreakdown = document.getElementById("consoMoisEnCoursBreakdown");
   const consoDerniereReleve = document.getElementById("consoDerniereReleve");
   const consoMoisPrecedentsSection = document.getElementById("consoMoisPrecedentsSection");
+  const consoHistoryTitle = document.getElementById("consoHistoryTitle");
+  const consoHistoryBadge = document.getElementById("consoHistoryBadge");
   const consoMonthsList = document.getElementById("consoMonthsList");
+  const loadOlderConsoBtn = document.getElementById("loadOlderConsoBtn");
+  const loadOlderConsoBtnText = document.getElementById("loadOlderConsoBtnText");
   const consoTotalBox = document.getElementById("consoTotalBox");
   const consoTotalTitle = document.getElementById("consoTotalTitle");
   const consoTotalBadge = document.getElementById("consoTotalBadge");
+  const copyConsoTotalBtn = document.getElementById("copyConsoTotalBtn");
   const consoTotalKwh = document.getElementById("consoTotalKwh");
   const consoTotalCost = document.getElementById("consoTotalCost");
   const consoAvgKwh = document.getElementById("consoAvgKwh");
@@ -109,10 +119,23 @@ document.addEventListener("DOMContentLoaded", () => {
   const consoEnedisWarningText = document.getElementById("consoEnedisWarningText");
   const badgeConsoStatus = document.getElementById("badgeConsoStatus");
   const syncConsoBtn = document.getElementById("syncConsoBtn");
+  const copyConsoBtn = document.getElementById("copyConsoBtn");
+  const copyConsoBtnText = document.getElementById("copyConsoBtnText");
+  const copyConsoCurrentMonthBtn = document.getElementById("copyConsoCurrentMonthBtn");
+
+  // Éléments de navigation des modules à la demande (Conso, Mensualités, SGE)
+  const contratSection = document.getElementById("contratSection");
+  const onDemandLauncherBox = document.getElementById("onDemandLauncherBox");
+  const launchConsoBtn = document.getElementById("launchConsoBtn");
+  const launchEcheancierBtn = document.getElementById("launchEcheancierBtn");
+  const launchSgeBtn = document.getElementById("launchSgeBtn");
 
   // Éléments du bloc Échéancier de paiement
   const echeancierCard = document.getElementById("echeancierCard");
   const badgeEcheancierStatus = document.getElementById("badgeEcheancierStatus");
+  const echeancierEmptyMessage = document.getElementById("echeancierEmptyMessage");
+  const echeancierEmptyText = document.getElementById("echeancierEmptyText");
+  const echeancierCurrentBox = document.getElementById("echeancierCurrentBox");
   const echeancierMontant = document.getElementById("echeancierMontant");
   const echeancierQuand = document.getElementById("echeancierQuand");
   const echeancierDepuis = document.getElementById("echeancierDepuis");
@@ -220,26 +243,52 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Normalise les plages Heures Creuses brutes en une liste de plages homogènes ("0h58 – 5h58")
+  // Normalise les plages Heures Creuses brutes en une liste de plages homogènes (simples ou saisonnières)
   function parseHcSchedule(valeur) {
-    const raw = String(valeur || "").trim();
+    let raw = String(valeur || "").trim();
     if (!raw) return [];
+
+    // Réparer d'éventuelles dates saisonnières altérées ("Du 01, 11 au 31, 03" -> "Du 01/11 au 31/03")
+    raw = raw.replace(/\b(Du|au)\s+(\d{1,2})\s*[,·]\s*(\d{1,2})\b/gi, "$1 $2/$3");
+    raw = raw.replace(/(\d{1,2})\s*[hH:]\s*(\d{2})/g, "$1h$2");
+
+    // Cas des plages saisonnières ("Du 01/11 au 31/03 : de 22h00 à 06h00 - Du 01/04 au 31/10 : ...")
+    if (/\bDu\s+\d{1,2}\/\d{1,2}/i.test(raw)) {
+      return raw
+        .split(/\s*(?:[-–;|]\s*)?(?=\bDu\s+\d{1,2}\/\d{1,2})/i)
+        .map((part) => part.replace(/\s*[-–]\s*$/, "").trim())
+        .filter((part) => part.length > 0);
+    }
+
+    // Cas des plages horaires classiques (sans jamais couper les barres obliques de dates JJ/MM)
     return raw
-      .replace(/(\d{1,2})\s*[hH]\s*(\d{2})/g, "$1h$2")
-      .split(/\s*[;,/]\s*/)
+      .split(/\s*(?:[;,]|(?<!\d)\/|\/(?!\d))\s*/)
       .map((part) => part.replace(/\s*[-–]\s*/g, " – ").trim())
       .filter((part) => part.length > 0);
   }
 
-  // Rend les plages Heures Creuses de façon lisible : tout sur une seule ligne
+  // Rend les plages Heures Creuses de façon lisible avec retour à la ligne automatique (jamais tronqué)
   function renderHcSchedule(container, valeur) {
     if (!container) return;
     container.textContent = "";
-    container.classList.remove("hc-value-inline");
+    container.classList.remove("hc-value-inline", "hc-value-stacked");
 
     const plages = parseHcSchedule(valeur);
     if (plages.length === 0) {
       container.textContent = "-";
+      return;
+    }
+
+    const isSeasonalOrLong = plages.some((p) => /\bDu\s+\d{1,2}\/\d{1,2}/i.test(p) || p.length > 24);
+
+    if (isSeasonalOrLong && plages.length > 1) {
+      container.classList.add("hc-value-stacked");
+      plages.forEach((plage) => {
+        const line = document.createElement("div");
+        line.className = "hc-line-block";
+        line.textContent = plage;
+        container.appendChild(line);
+      });
       return;
     }
 
@@ -271,6 +320,12 @@ document.addEventListener("DOMContentLoaded", () => {
     document.body.classList.add("mode-fullscreen");
     document.title = "🐙 Octopus & Kraken - Dashboard Contrat";
   }
+
+  // Signaler au background que le volet latéral est ouvert (pour masquer le bouton flottant sur Kraken tant que le volet est ouvert)
+  let sidePanelPort = null;
+  try {
+    sidePanelPort = chrome.runtime.connect({ name: "octopus-sidepanel" });
+  } catch (_) {}
 
   // Thème clair / sombre (persisté et synchronisé entre popup, fenêtre et dashboard)
   const themeToggleBtn = document.getElementById("themeToggleBtn");
@@ -318,20 +373,220 @@ document.addEventListener("DOMContentLoaded", () => {
   let activeTabContext = { agreementIds: [], agreementId: null };
   let cachedPaymentData = null;
 
+  // État d'activation des modules : seul « contrat » est actif par défaut (léger)
+  const activeModules = {
+    contrat: true,
+    conso: false,
+    echeancier: false,
+    sge: false
+  };
+
+  function resetOnDemandModules() {
+    activeModules.contrat = true;
+    activeModules.conso = false;
+    activeModules.echeancier = false;
+    activeModules.sge = false;
+    syncModuleVisibilityUI();
+  }
+
+  function syncModuleVisibilityUI() {
+    if (contratSection) {
+      contratSection.classList.toggle("hidden", !activeModules.contrat);
+    }
+    if (consoCard) {
+      consoCard.classList.toggle("hidden", !activeModules.conso);
+    }
+    if (echeancierCard) {
+      echeancierCard.classList.toggle("hidden", !activeModules.echeancier);
+      echeancierCard.style.display = activeModules.echeancier ? "" : "none";
+    }
+    if (sgeCard) {
+      sgeCard.classList.toggle("hidden", !activeModules.sge);
+    }
+
+    if (launchConsoBtn) launchConsoBtn.classList.toggle("active", activeModules.conso);
+    if (launchEcheancierBtn) launchEcheancierBtn.classList.toggle("active", activeModules.echeancier);
+    if (launchSgeBtn) launchSgeBtn.classList.toggle("active", activeModules.sge);
+  }
+
+  async function toggleModule(modName) {
+    if (!(modName in activeModules)) return;
+    const willBeActive = !activeModules[modName];
+    activeModules[modName] = willBeActive;
+    syncModuleVisibilityUI();
+
+    if (!willBeActive) return;
+
+    if (modName === "contrat" && contratSection) {
+      contratSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      return;
+    }
+
+    if (modName === "conso") {
+      if (currentContract) {
+        if (!currentContract.consoMensuelle || !currentContract.consoMensuelle.hasData) {
+          fetchConsoForContract(currentContract);
+        } else {
+          renderConsoDetails(currentContract.consoMensuelle);
+        }
+      }
+      if (consoCard) consoCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      return;
+    }
+
+    if (modName === "echeancier") {
+      if (!cachedPaymentData) {
+        const targetTabId = activeTabContext?.tabId || (await getKrakenTabId());
+        fetchPaymentSchedule(currentAccountNumber, targetTabId);
+      } else {
+        renderEcheancierForContract(currentContract?.prm);
+      }
+      if (echeancierCard) echeancierCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      return;
+    }
+
+    if (modName === "sge") {
+      if (currentContract && currentContract.prm && /^\d{14}$/.test(String(currentContract.prm))) {
+        if (!currentSgeData || !currentSgeData.hasData) {
+          fetchSgeForCurrentContract(currentContract.prm, false);
+        } else {
+          renderSgeDetails(currentSgeData);
+        }
+      } else {
+        renderSgeDetails(null);
+      }
+      if (sgeCard) sgeCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }
+
+  [launchConsoBtn, launchEcheancierBtn, launchSgeBtn].forEach((btn) => {
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      const mod = btn.getAttribute("data-module");
+      if (mod) toggleModule(mod);
+    });
+  });
+
   // Initialisation au chargement du popup (restitution instantanée depuis le cache si disponible)
   loadData(false);
 
   // Événement d'actualisation (force la synchronisation en direct en contournant le cache)
   refreshBtn.addEventListener("click", () => {
+    cachedPaymentData = null;
+    currentSgeData = null;
     loadData(true);
   });
 
   // Événement de synchronisation manuelle dédiée du suivi conso
   if (syncConsoBtn) {
-    syncConsoBtn.addEventListener("click", () => {
+    syncConsoBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
       if (currentContract) {
-        fetchConsoForContract(currentContract, true);
+        const curConso = currentContract.consoMensuelle;
+        const keepOlder = Boolean(curConso?.olderMonthsLoaded || curConso?.periodFilter === "last_year" || curConso?.periodFilter === "all");
+        const keepPeriod = curConso?.periodFilter || null;
+        fetchConsoForContract(currentContract, true, keepOlder, keepPeriod);
       }
+    });
+  }
+
+  // Copie rapide du récapitulatif complet de consommation (selon la période sélectionnée)
+  if (copyConsoBtn) {
+    copyConsoBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!currentContract?.consoMensuelle?.hasData) return;
+      const text = formatFullConsoRecapText(currentContract.consoMensuelle);
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(() => {
+        showCopyFeedback("Récap conso copié !");
+        if (copyConsoBtnText) {
+          const prev = copyConsoBtnText.textContent;
+          copyConsoBtn.classList.add("copied");
+          copyConsoBtnText.textContent = "✓ Conso copiée";
+          setTimeout(() => {
+            copyConsoBtn.classList.remove("copied");
+            copyConsoBtnText.textContent = prev;
+          }, 1600);
+        }
+      });
+    });
+  }
+
+  // Copie rapide depuis la boîte Total de la période sélectionnée
+  if (copyConsoTotalBtn) {
+    copyConsoTotalBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!currentContract?.consoMensuelle?.hasData) return;
+      const text = formatFullConsoRecapText(currentContract.consoMensuelle);
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(() => {
+        showCopyFeedback("Total et récap de la période copiés !");
+        copyConsoTotalBtn.classList.add("copied");
+        copyConsoTotalBtn.textContent = "✓";
+        setTimeout(() => {
+          copyConsoTotalBtn.classList.remove("copied");
+          copyConsoTotalBtn.textContent = "📋";
+        }, 1400);
+      });
+    });
+  }
+
+  // Copie rapide du mois en cours uniquement
+  if (copyConsoCurrentMonthBtn) {
+    copyConsoCurrentMonthBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const cur = currentContract?.consoMensuelle?.moisEnCours;
+      if (!cur) return;
+      const text = formatSingleMonthConsoText(cur, true);
+      navigator.clipboard.writeText(text).then(() => {
+        showCopyFeedback(`Conso ${cur.label} copiée !`);
+        copyConsoCurrentMonthBtn.classList.add("copied");
+        copyConsoCurrentMonthBtn.textContent = "✓";
+        setTimeout(() => {
+          copyConsoCurrentMonthBtn.classList.remove("copied");
+          copyConsoCurrentMonthBtn.textContent = "📋";
+        }, 1400);
+      });
+    });
+  }
+
+  // Changement du filtre de période de consommation ("12m" | "current_year" | "last_year" | "all")
+  function setConsoPeriodFilter(period) {
+    if (!currentContract || !currentContract.consoMensuelle) return;
+    const conso = currentContract.consoMensuelle;
+    conso.periodFilter = period;
+    conso.showOlderMonths = period === "all";
+
+    const needsOlderFetch =
+      !conso.olderMonthsLoaded &&
+      (period === "all" || (period === "last_year" && (conso.needsOlderFetchForLastYear || conso.hasOlderMonths)));
+
+    if (needsOlderFetch) {
+      fetchConsoForContract(currentContract, false, true, period);
+      return;
+    }
+
+    renderConsoDetails(conso);
+  }
+
+  [consoFilter12m, consoFilterCurrentYear, consoFilterLastYear, consoFilterAll].forEach((chip) => {
+    if (!chip) return;
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const period = chip.getAttribute("data-period") || "12m";
+      setConsoPeriodFilter(period);
+    });
+  });
+
+  // Bouton « Voir au-delà de 12 mois » (chargement à la demande puis bascule affichage)
+  if (loadOlderConsoBtn) {
+    loadOlderConsoBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!currentContract || !currentContract.consoMensuelle) return;
+      const conso = currentContract.consoMensuelle;
+      const currentPeriod = conso.periodFilter || (conso.olderMonthsLoaded && conso.showOlderMonths !== false ? "all" : "12m");
+      const nextPeriod = currentPeriod === "all" ? "12m" : "all";
+      setConsoPeriodFilter(nextPeriod);
     });
   }
 
@@ -510,8 +765,8 @@ document.addEventListener("DOMContentLoaded", () => {
       currentContract = contract;
       renderContractDetails(contract);
 
-      // Si le suivi conso n'a pas encore été récupéré pour ce contrat spécifique
-      if ((!contract.consoMensuelle || !contract.consoMensuelle.hasData) && contract.prm && contract.prm !== "-") {
+      // Si le module Conso est ouvert et n'a pas encore de données pour ce contrat
+      if (activeModules.conso && (!contract.consoMensuelle || !contract.consoMensuelle.hasData) && contract.prm && contract.prm !== "-") {
         fetchConsoForContract(contract);
       }
     }
@@ -668,21 +923,40 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  function showEcheancierEmptyState(msg, badgeText = "Non disponible", badgeClass = "badge badge-warning") {
+    if (badgeEcheancierStatus) {
+      badgeEcheancierStatus.textContent = badgeText;
+      badgeEcheancierStatus.className = badgeClass;
+    }
+    if (echeancierCurrentBox) echeancierCurrentBox.classList.add("hidden");
+    if (echeancierHistoriqueBox) echeancierHistoriqueBox.style.display = "none";
+    if (echeancierCalcBox) echeancierCalcBox.classList.add("hidden");
+    if (echeancierEmptyMessage) {
+      echeancierEmptyMessage.classList.remove("hidden");
+      if (echeancierEmptyText) echeancierEmptyText.textContent = msg;
+    }
+  }
+
   /**
    * Récupère l'échéancier de paiement depuis Kraken via le partial endpoint
    * @param {string} account - Le numéro de compte (ex: A-C887F289)
    * @param {number} tabId - L'ID de l'onglet Kraken
    */
   async function fetchPaymentSchedule(account, tabId) {
-    if (!account || !tabId) return;
+    const resolvedTabId = tabId || (await getKrakenTabId());
+    if (!account || !resolvedTabId) {
+      showEcheancierEmptyState(
+        "ℹ️ Ouvrez la fiche compte sur Kraken (support.oefr-kraken.energy) pour récupérer l'échéancier de mensualités.",
+        "Kraken requis",
+        "badge badge-warning"
+      );
+      return;
+    }
     try {
-      if (badgeEcheancierStatus) {
-        badgeEcheancierStatus.textContent = "Chargement...";
-        badgeEcheancierStatus.className = "badge badge-info";
-      }
+      showEcheancierEmptyState("⏳ Récupération de l'échéancier sur Kraken...", "Chargement...", "badge badge-info");
 
       const [result] = await chrome.scripting.executeScript({
-        target: { tabId: tabId },
+        target: { tabId: resolvedTabId },
         func: async (acct) => {
           try {
             // 1. Récupérer les échéanciers groupés par ledger
@@ -727,10 +1001,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const payload = result?.result;
       if (!payload || !payload.ledgersData || payload.ledgersData.length === 0) {
-        if (badgeEcheancierStatus) {
-          badgeEcheancierStatus.textContent = "Non disponible";
-          badgeEcheancierStatus.className = "badge badge-warning";
-        }
+        showEcheancierEmptyState(
+          "ℹ️ Aucun échéancier de mensualités actif trouvé sur Kraken pour ce compte.",
+          "Aucun échéancier",
+          "badge badge-warning"
+        );
         return;
       }
 
@@ -744,7 +1019,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (knownPrms.length > 0) {
         try {
           const mappingResults = await chrome.scripting.executeScript({
-            target: { tabId: tabId, allFrames: true },
+            target: { tabId: resolvedTabId, allFrames: true },
             func: (targetPrms) => {
               var rawText = (document.body && document.body.textContent) ? document.body.textContent : "";
               if (rawText.length < 20) return null;
@@ -1116,16 +1391,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const schedules = targetSection?.schedules;
     if (!schedules || schedules.length === 0) {
-      if (badgeEcheancierStatus) {
-        badgeEcheancierStatus.textContent = "Aucun";
-        badgeEcheancierStatus.className = "badge badge-warning";
-      }
-      if (echeancierCard) echeancierCard.style.display = "none";
+      showEcheancierEmptyState(
+        "ℹ️ Aucun échéancier de mensualités trouvé pour ce contrat.",
+        "Aucun",
+        "badge badge-warning"
+      );
       return;
     }
 
-    // Afficher la carte
-    if (echeancierCard) echeancierCard.style.display = "";
+    if (echeancierEmptyMessage) echeancierEmptyMessage.classList.add("hidden");
+    if (echeancierCurrentBox) echeancierCurrentBox.classList.remove("hidden");
+    if (echeancierCalcBox) echeancierCalcBox.classList.remove("hidden");
+    if (echeancierCard && activeModules.echeancier) {
+      echeancierCard.classList.remove("hidden");
+      echeancierCard.style.display = "";
+    }
 
     // Mensualité actuelle : privilégier la ligne active > 0 €, sinon la première ligne > 0 €
     const current = schedules.find(s => s.isActive && parseScheduleMontant(s.montant) > 0)
@@ -1366,8 +1646,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     activeSgeFetchPrm = prmStr;
 
-    // Noter l'onglet et la fenêtre actuels de l'extension pour garder le focus
-    const currentTab = await chrome.tabs.getCurrent().catch(() => null);
+    // Noter l'onglet et la fenêtre actuels de l'extension (ou l'onglet Kraken si exécution dans le volet latéral)
+    const extTab = await chrome.tabs.getCurrent().catch(() => null);
+    const fallbackKrakenTabId = !extTab ? (await getKrakenTabId()) : null;
+    const currentTab = extTab || (fallbackKrakenTabId ? { id: fallbackKrakenTabId } : null);
     const currentWin = await chrome.windows.getCurrent().catch(() => null);
 
     // État de chargement initial
@@ -1614,7 +1896,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (sgeHcRow && sgePlagesHc) {
         if (sge.plagesHcFormatees) {
           sgeHcRow.classList.remove("hidden");
-          sgePlagesHc.textContent = sge.plagesHcFormatees;
+          renderHcSchedule(sgePlagesHc, sge.plagesHcFormatees);
         } else {
           sgeHcRow.classList.add("hidden");
         }
@@ -1668,7 +1950,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const banner = document.createElement("div");
         banner.id = "fournisseur-alert-banner";
         banner.className = "alert-banner danger-banner";
-        banner.innerHTML = `<strong>⚠️ Attention :</strong> Action(s) à l'initiative du fournisseur détectée(s) : ${alerts.join(", ")}`;
+        const strongEl = document.createElement("strong");
+        strongEl.textContent = "⚠️ Attention :";
+        banner.appendChild(strongEl);
+        banner.appendChild(document.createTextNode(` Action(s) à l'initiative du fournisseur détectée(s) : ${alerts.join(", ")}`));
         
         const header = appContainer.querySelector(".app-header");
         if (header && header.nextSibling) {
@@ -2011,61 +2296,229 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  function getHcRatioText(hp, hc) {
+    if (!hp || !hc) return "";
+    const total = hp + hc;
+    if (total === 0) return "";
+    const ratio = Math.round((hc / total) * 100);
+    const isRentable = ratio >= 30;
+    return `(Ratio HC : ${ratio}% ${isRentable ? "✅ Rentable" : "⚠️ Non rentable"})`;
+  }
+
+  function getYearFromConsoItem(item) {
+    if (!item) return null;
+    if (item.yearMonth && typeof item.yearMonth === "string") {
+      const m = item.yearMonth.match(/^(\d{4})-/);
+      if (m) return parseInt(m[1], 10);
+    }
+    if (item.label && typeof item.label === "string") {
+      const m = item.label.match(/\b(\d{4})\b/);
+      if (m) return parseInt(m[1], 10);
+    }
+    return null;
+  }
+
+  function getDisplayedConsoMonths(conso) {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const lastYear = currentYear - 1;
+
+    if (!conso || !conso.hasData) {
+      return {
+        periodFilter: "12m",
+        current: null,
+        precedents: [],
+        all: [],
+        isShowingOlder: false,
+        recentPrecedentsLimit: 11,
+        currentYear,
+        lastYear,
+        periodTitle: "Total cumulé",
+        historyTitle: "Mois précédents",
+        periodLabel: "12 derniers mois"
+      };
+    }
+
+    const periodFilter = conso.periodFilter || (conso.olderMonthsLoaded && conso.showOlderMonths !== false ? "all" : "12m");
+    const rawCur = conso.moisEnCours || null;
+    const allPrecedents = conso.moisPrecedents || [];
+    const recentPrecedentsLimit = rawCur ? 11 : 12;
+
+    if (periodFilter === "current_year") {
+      const cur = rawCur && getYearFromConsoItem(rawCur) === currentYear ? rawCur : null;
+      const precedents = allPrecedents.filter(m => getYearFromConsoItem(m) === currentYear);
+      const all = [cur, ...precedents].filter(Boolean);
+      return {
+        periodFilter,
+        current: cur,
+        precedents,
+        all,
+        isShowingOlder: false,
+        recentPrecedentsLimit,
+        currentYear,
+        lastYear,
+        periodTitle: `Total Année ${currentYear} (depuis 1er janv.)`,
+        historyTitle: `Mois précédents en ${currentYear}`,
+        periodLabel: `Année ${currentYear} (depuis le 1er janvier)`
+      };
+    }
+
+    if (periodFilter === "last_year") {
+      const allRaw = [rawCur, ...allPrecedents].filter(Boolean);
+      const precedents = allRaw.filter(m => getYearFromConsoItem(m) === lastYear);
+      const all = [...precedents];
+      return {
+        periodFilter,
+        current: null,
+        precedents,
+        all,
+        isShowingOlder: false,
+        recentPrecedentsLimit,
+        currentYear,
+        lastYear,
+        periodTitle: `Total Année ${lastYear}`,
+        historyTitle: `Détail de l'année ${lastYear}`,
+        periodLabel: `Année ${lastYear} complète`
+      };
+    }
+
+    if (periodFilter === "all") {
+      const cur = rawCur;
+      const precedents = allPrecedents;
+      const all = [cur, ...precedents].filter(Boolean);
+      const isShowingOlder = allPrecedents.length > recentPrecedentsLimit;
+      return {
+        periodFilter: "all",
+        current: cur,
+        precedents,
+        all,
+        isShowingOlder,
+        recentPrecedentsLimit,
+        currentYear,
+        lastYear,
+        periodTitle: `Total cumulé (${all.length} mois)`,
+        historyTitle: "Mois précédents",
+        periodLabel: `Historique complet (${all.length} mois)`
+      };
+    }
+
+    // Par défaut : "12m" (12 derniers mois)
+    const cur = rawCur;
+    const precedents = allPrecedents.slice(0, recentPrecedentsLimit);
+    const all = [cur, ...precedents].filter(Boolean);
+    return {
+      periodFilter: "12m",
+      current: cur,
+      precedents,
+      all,
+      isShowingOlder: false,
+      recentPrecedentsLimit,
+      currentYear,
+      lastYear,
+      periodTitle: `Total cumulé (${all.length} mois)`,
+      historyTitle: "Mois précédents",
+      periodLabel: `12 derniers mois (${all.length} mois)`
+    };
+  }
+
+  function formatSingleMonthConsoText(item, isCurrentMonth = false) {
+    if (!item) return "";
+    const prmStr = currentContract?.prm && currentContract.prm !== "-" ? ` — PRM ${currentContract.prm}` : "";
+    const tagStr = isCurrentMonth ? " (mois en cours)" : "";
+    const costStr = (item.costFormate && item.costFormate !== "-") ? ` (${item.costFormate})` : "";
+    const lines = [
+      `📊 Consommation ${item.label}${tagStr}${prmStr} : ${item.kwhFormate}${costStr}`
+    ];
+    if (item.hpKwh && item.hcKwh) {
+      lines.push(`• Détail HP / HC : HP : ${item.hpKwh.toLocaleString("fr-FR")} kWh • HC : ${item.hcKwh.toLocaleString("fr-FR")} kWh ${getHcRatioText(item.hpKwh, item.hcKwh)}`);
+    }
+    if (item.costEnergyEur !== undefined && item.costEnergyEur !== null && item.costAboEur !== undefined && item.costAboEur > 0) {
+      lines.push(`• Détail coût : Énergie : ${item.costEnergyEur.toFixed(2).replace(".", ",")} € • Abonnement : ${item.costAboEur.toFixed(2).replace(".", ",")} €`);
+    }
+    return lines.join("\n");
+  }
+
+  function buildConsoSummaryLines(conso) {
+    if (!conso || !conso.hasData) return [];
+    const {
+      periodFilter,
+      current: cur,
+      precedents,
+      all: allMonths,
+      isShowingOlder,
+      recentPrecedentsLimit,
+      periodTitle,
+      historyTitle,
+      periodLabel
+    } = getDisplayedConsoMonths(conso);
+    const lines = [];
+    lines.push(`• Période : ${periodLabel}`);
+    if (conso.derniereReleve && periodFilter !== "last_year") {
+      lines.push(`• Dernière relève reçue : ${conso.derniereReleve}`);
+    }
+    if (cur) {
+      const costStr = (cur.costFormate && cur.costFormate !== "-") ? ` (${cur.costFormate})` : "";
+      lines.push(`• Mois en cours (${cur.label}) : ${cur.kwhFormate}${costStr}`);
+      if (cur.hpKwh && cur.hcKwh) {
+        lines.push(`  (HP : ${cur.hpKwh.toLocaleString("fr-FR")} kWh • HC : ${cur.hcKwh.toLocaleString("fr-FR")} kWh) ${getHcRatioText(cur.hpKwh, cur.hcKwh)}`);
+      }
+      if (cur.costEnergyEur !== undefined && cur.costEnergyEur !== null && cur.costAboEur !== undefined && cur.costAboEur > 0) {
+        lines.push(`  (Énergie : ${cur.costEnergyEur.toFixed(2).replace(".", ",")} € • Abonnement : ${cur.costAboEur.toFixed(2).replace(".", ",")} €)`);
+      }
+    }
+    if (precedents.length > 0) {
+      const precLines = [];
+      precedents.forEach((p, idx) => {
+        if (isShowingOlder && idx === recentPrecedentsLimit) {
+          precLines.push(`  --- Au-delà de 12 mois ---`);
+        }
+        const costStr = (p.costFormate && p.costFormate !== "-") ? ` (${p.costFormate})` : "";
+        const hcTxt = (p.hpKwh && p.hcKwh) ? ` [HP:${p.hpKwh.toLocaleString("fr-FR")} HC:${p.hcKwh.toLocaleString("fr-FR")} ${getHcRatioText(p.hpKwh, p.hcKwh)}]` : "";
+        precLines.push(`  - ${p.label} : ${p.kwhFormate}${costStr}${hcTxt}`);
+      });
+      lines.push(`• ${historyTitle} (${precedents.length} mois) :\n${precLines.join("\n")}`);
+    }
+    if (allMonths.length > 0) {
+      const nbM = allMonths.length;
+      const totKwh = Math.round(allMonths.reduce((s, m) => s + (m.kwh || 0), 0) * 10) / 10;
+      const totCost = Math.round(allMonths.reduce((s, m) => s + (m.costEur || 0), 0) * 100) / 100;
+      const totHp = Math.round(allMonths.reduce((s, m) => s + (m.hpKwh || 0), 0) * 10) / 10;
+      const totHc = Math.round(allMonths.reduce((s, m) => s + (m.hcKwh || 0), 0) * 10) / 10;
+      const totCostStr = totCost > 0 ? `${totCost.toFixed(2).replace(".", ",")} €` : "-";
+      const avgKwh = Math.round((totKwh / nbM) * 10) / 10;
+      const avgCost = totCost > 0 ? Math.round((totCost / nbM) * 100) / 100 : null;
+      const avgCostStr = avgCost > 0 ? `${avgCost.toFixed(2).replace(".", ",")} €/mois` : "-";
+
+      lines.push(`• ${periodTitle} (${nbM} mois) : ${totKwh.toLocaleString("fr-FR")} kWh • ${totCostStr}`);
+      if (totHp > 0 && totHc > 0) {
+        lines.push(`  (Total HP : ${totHp.toLocaleString("fr-FR")} kWh • Total HC : ${totHc.toLocaleString("fr-FR")} kWh) ${getHcRatioText(totHp, totHc)}`);
+      }
+      lines.push(`• Moyenne mensuelle : ${avgKwh.toLocaleString("fr-FR")} kWh/mois • ${avgCostStr}`);
+    }
+    return lines;
+  }
+
+  function formatFullConsoRecapText(conso) {
+    if (!conso || !conso.hasData) return "";
+    const headerLines = [
+      `📊 RÉCAPITULATIF DE CONSOMMATION`,
+      `• Compte : ${currentAccountNumber || "-"}${currentContract?.prm && currentContract.prm !== "-" ? ` | PRM : ${currentContract.prm}` : ""}`
+    ];
+    if (currentContract?.nomOffre) {
+      headerLines.push(`• Offre : ${currentContract.nomOffre}${currentContract.optionTarifaire && currentContract.optionTarifaire !== "-" ? ` (${currentContract.optionTarifaire})` : ""}`);
+    }
+    const bodyLines = buildConsoSummaryLines(conso);
+    return [...headerLines, ...bodyLines].join("\n");
+  }
+
   // Copie du récapitulatif complet
   copySummaryBtn.addEventListener("click", () => {
     if (!currentContract) return;
 
-    function getHcRatioText(hp, hc) {
-      if (!hp || !hc) return "";
-      const total = hp + hc;
-      if (total === 0) return "";
-      const ratio = Math.round((hc / total) * 100);
-      const isRentable = ratio >= 30;
-      return `(Ratio HC : ${ratio}% ${isRentable ? "✅ Rentable" : "⚠️ Non rentable"})`;
-    }
-
     const consoLines = [];
     if (currentContract.consoMensuelle && currentContract.consoMensuelle.hasData) {
-      const conso = currentContract.consoMensuelle;
       consoLines.push(`\n📊 SUIVI DE CONSOMMATION`);
-      if (conso.derniereReleve) {
-        consoLines.push(`• Dernière relève reçue : ${conso.derniereReleve}`);
-      }
-      if (conso.moisEnCours) {
-        const cur = conso.moisEnCours;
-        const costStr = (cur.costFormate && cur.costFormate !== "-") ? ` (${cur.costFormate})` : "";
-        consoLines.push(`• Mois en cours (${cur.label}) : ${cur.kwhFormate}${costStr}`);
-        if (cur.hpKwh && cur.hcKwh) {
-          consoLines.push(`  (HP : ${cur.hpKwh} kWh • HC : ${cur.hcKwh} kWh) ${getHcRatioText(cur.hpKwh, cur.hcKwh)}`);
-        }
-        if (cur.costEnergyEur !== undefined && cur.costAboEur !== undefined && cur.costAboEur > 0) {
-          consoLines.push(`  (Énergie : ${cur.costEnergyEur.toFixed(2).replace(".", ",")} € • Abonnement : ${cur.costAboEur.toFixed(2).replace(".", ",")} €)`);
-        }
-      }
-      if (conso.moisPrecedents?.length > 0) {
-        const prec = conso.moisPrecedents.map(p => {
-          const costStr = (p.costFormate && p.costFormate !== "-") ? ` (${p.costFormate})` : "";
-          const hcTxt = (p.hpKwh && p.hcKwh) ? ` [HP:${p.hpKwh} HC:${p.hcKwh} ${getHcRatioText(p.hpKwh, p.hcKwh)}]` : "";
-          return `  - ${p.label} : ${p.kwhFormate}${costStr}${hcTxt}`;
-        });
-        consoLines.push(`• Mois précédents :\n${prec.join("\n")}`);
-      }
-      const allMonths = [conso.moisEnCours, ...(conso.moisPrecedents || [])].filter(Boolean);
-      if (allMonths.length > 0) {
-        const nbM = allMonths.length;
-        const totKwh = conso.totalKwh !== undefined ? conso.totalKwh : Math.round(allMonths.reduce((s, m) => s + (m.kwh || 0), 0) * 10) / 10;
-        const totCost = conso.totalCostEur !== undefined ? conso.totalCostEur : Math.round(allMonths.reduce((s, m) => s + (m.costEur || 0), 0) * 100) / 100;
-        const totCostStr = totCost > 0 ? `${totCost.toFixed(2).replace(".", ",")} €` : "-";
-        const avgKwh = Math.round((totKwh / nbM) * 10) / 10;
-        const avgCost = totCost > 0 ? Math.round((totCost / nbM) * 100) / 100 : null;
-        const avgCostStr = avgCost > 0 ? `${avgCost.toFixed(2).replace(".", ",")} €/mois` : "-";
-
-        consoLines.push(`• Total cumulé (${nbM} mois) : ${totKwh.toLocaleString("fr-FR")} kWh • ${totCostStr}`);
-        if (conso.totalHp && conso.totalHc) {
-          consoLines.push(`  (Total HP : ${conso.totalHp} kWh • Total HC : ${conso.totalHc} kWh) ${getHcRatioText(conso.totalHp, conso.totalHc)}`);
-        }
-        consoLines.push(`• Moyenne mensuelle : ${avgKwh.toLocaleString("fr-FR")} kWh/mois • ${avgCostStr}`);
-      }
+      consoLines.push(...buildConsoSummaryLines(currentContract.consoMensuelle));
     }
 
     // Données SGE Enedis
@@ -2152,13 +2605,35 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       let tab = null;
 
-      // 1. Détermination prioritaire du compte cible
+      // 1. Détermination prioritaire du compte cible (URL param ou clic récent sur le bouton Kraken)
       let account = initialAccount || null;
+      let targetTabIdFromStorage = initialTabId || null;
 
-      // 2. Recherche de l'onglet associé
-      if (initialTabId) {
+      if (!account && !targetTabIdFromStorage) {
         try {
-          const candidate = await chrome.tabs.get(initialTabId);
+          const storedCtx = await chrome.storage.local.get(["sidepanel_target_context"]);
+          const ctx = storedCtx?.sidepanel_target_context;
+          if (ctx && Date.now() - (ctx.updatedAt || 0) < 15000) {
+            if (ctx.tabId) targetTabIdFromStorage = ctx.tabId;
+            if (ctx.account) account = ctx.account;
+          }
+        } catch (_) {}
+      }
+
+      // 2. Priorité à l'onglet actif de la fenêtre courante s'il s'agit d'une page Kraken / Espace Client
+      try {
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (activeTab?.url && (activeTab.url.includes("support.oefr-kraken.energy") || activeTab.url.includes("octopusenergy.fr"))) {
+          tab = activeTab;
+          const m = activeTab.url.match(/(?:accounts|comptes)\/(A-[A-Z0-9]+)/i);
+          if (m) account = m[1];
+        }
+      } catch (_) {}
+
+      // 3. Recherche de l'onglet associé via targetTabIdFromStorage si pas encore résolu
+      if (!tab && targetTabIdFromStorage) {
+        try {
+          const candidate = await chrome.tabs.get(targetTabIdFromStorage);
           if (candidate?.url && (candidate.url.includes("support.oefr-kraken.energy") || candidate.url.includes("octopusenergy.fr"))) {
             if (!account || candidate.url.includes(account)) {
               tab = candidate;
@@ -2171,7 +2646,7 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (_) {}
       }
 
-      // Si le compte est spécifié dans l'URL mais tab pas encore trouvée, chercher l'onglet Kraken correspondant exactement à ce compte
+      // Si le compte est spécifié mais tab pas encore trouvée, chercher l'onglet Kraken correspondant exactement à ce compte
       if (!tab && account) {
         try {
           const allKraken = await chrome.tabs.query({ url: ["https://support.oefr-kraken.energy/*", "https://octopusenergy.fr/*"] });
@@ -2182,10 +2657,9 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (_) {}
       }
 
-      // En mode fenêtre autonome ou plein écran, si toujours pas de tab, chercher parmi tous les onglets Kraken
-      if (!tab && (currentMode === "window" || currentMode === "fullscreen")) {
+      // Si toujours pas de tab (volet latéral, fenêtre autonome ou plein écran), chercher parmi tous les onglets Kraken
+      if (!tab) {
         try {
-          // D'abord chercher parmi les actifs
           const activeTabs = await chrome.tabs.query({ active: true });
           const krakenActive = activeTabs.find(t => t.url && (t.url.includes("support.oefr-kraken.energy") || t.url.includes("octopusenergy.fr")));
           if (krakenActive) {
@@ -2197,12 +2671,10 @@ document.addEventListener("DOMContentLoaded", () => {
           }
         } catch (_) {}
 
-        // Si toujours pas trouvé (onglet Kraken non actif car le fullscreen a pris le focus), chercher parmi tous les onglets
         if (!tab) {
           try {
             const allKraken = await chrome.tabs.query({ url: ["https://support.oefr-kraken.energy/*", "https://octopusenergy.fr/*"] });
             if (allKraken.length > 0) {
-              // Privilégier celui qui contient le compte si on le connaît
               tab = (account ? allKraken.find(t => t.url.includes(account)) : null) || allKraken[0];
               if (!account) {
                 const m = tab.url.match(/(?:accounts|comptes)\/(A-[A-Z0-9]+)/i);
@@ -2211,14 +2683,6 @@ document.addEventListener("DOMContentLoaded", () => {
             }
           } catch (_) {}
         }
-      }
-
-      // En mode standard popup (ou repli) : prendre l'onglet actif de la fenêtre courante
-      if (!tab) {
-        try {
-          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-          tab = activeTab;
-        } catch (_) {}
       }
 
       // Extraction de secours du compte depuis tab si toujours non défini
@@ -2236,6 +2700,13 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!account) {
         showError("Veuillez vous positionner sur une page compte Kraken (support.oefr-kraken.energy) ou sur l'espace client.");
         return;
+      }
+
+      // Si on change de compte client, réinitialiser les modules à la demande (seul Contrat est affiché)
+      if (currentAccountNumber !== account) {
+        cachedPaymentData = null;
+        currentSgeData = null;
+        resetOnDemandModules();
       }
 
       currentAccountNumber = account;
@@ -2263,17 +2734,12 @@ document.addEventListener("DOMContentLoaded", () => {
               handleContractsResult(cached.contracts);
               showContent();
 
-              // Récupérer l'échéancier de paiement en parallèle
-              if (tab?.id && account) {
+              if (activeModules.echeancier && tab?.id && account) {
                 fetchPaymentSchedule(account, tab.id);
               }
-
-              // Lancement discret d'une revalidation en tâche de fond sans bloquer l'UI
-              triggerSilentBackgroundRevalidation(tab, account);
               return;
             }
           } else if (cached && cached.cacheVersion !== CACHE_VERSION) {
-            // Nettoyage proactif de l'ancien cache v2 / v3
             chrome.storage.local.remove([cacheKey]);
           }
         } catch (cErr) {
@@ -2738,8 +3204,8 @@ document.addEventListener("DOMContentLoaded", () => {
             handleContractsResult(response.data);
             showContent();
 
-            // Récupérer l'échéancier de paiement en parallèle
-            if (tab?.id && currentAccountNumber) {
+            // Récupérer l'échéancier uniquement si le module Mensualités est activé
+            if (activeModules.echeancier && tab?.id && currentAccountNumber) {
               fetchPaymentSchedule(currentAccountNumber, tab.id);
             }
           }
@@ -3246,7 +3712,7 @@ document.addEventListener("DOMContentLoaded", () => {
       for (const newC of contracts) {
         const oldC = contractsList.find(old => String(old.id) === String(newC.id) || (old.prm && old.prm === newC.prm));
         if (oldC) {
-          if (!newC.consoMensuelle && oldC.consoMensuelle) {
+          if (oldC.consoMensuelle && (!newC.consoMensuelle || (oldC.consoMensuelle.olderMonthsLoaded && !newC.consoMensuelle.olderMonthsLoaded))) {
             newC.consoMensuelle = oldC.consoMensuelle;
           }
           if (!newC.propertyId && oldC.propertyId) {
@@ -3321,8 +3787,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     renderContractDetails(targetContract);
 
-    // Si le suivi conso n'a pas encore de données pour ce contrat, déclencher la récupération
-    if ((!targetContract.consoMensuelle || !targetContract.consoMensuelle.hasData) && targetContract.prm && targetContract.prm !== "-") {
+    // Récupérer la conso uniquement si l'utilisateur a activé le module Conso
+    if (activeModules.conso && (!targetContract.consoMensuelle || !targetContract.consoMensuelle.hasData) && targetContract.prm && targetContract.prm !== "-") {
       fetchConsoForContract(targetContract);
     }
 
@@ -3390,20 +3856,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
     valeurAdresse.textContent = c.adresse;
 
-    // Rendu du Suivi Conso Mensuel
+    // Rendu du Suivi Conso Mensuel (si déjà présent en cache)
     renderConsoDetails(c.consoMensuelle);
 
     // Réinitialiser l'état SGE pour le nouveau contrat
     currentSgeData = null;
     renderSgeDetails(null);
 
-    // Rafraîchir l'échéancier pour le nouveau contrat (sans re-fetch, juste re-render)
-    if (cachedPaymentData) {
+    // Rafraîchir l'échéancier pour le nouveau contrat (uniquement si déjà chargé et module actif)
+    if (cachedPaymentData && activeModules.echeancier) {
       renderEcheancierForContract(c.prm);
     }
 
-    // Récupération automatique et transparente des données SGE Enedis dès l'ouverture
-    if (c.prm && /^\d{14}$/.test(String(c.prm)) && (!c.typeEnergie || !c.typeEnergie.toLowerCase().includes("gaz"))) {
+    // Récupération des données SGE Enedis uniquement si le module SGE est activé par l'utilisateur
+    if (activeModules.sge && c.prm && /^\d{14}$/.test(String(c.prm)) && (!c.typeEnergie || !c.typeEnergie.toLowerCase().includes("gaz"))) {
       fetchSgeForCurrentContract(c.prm, false);
     }
   }
@@ -3415,27 +3881,45 @@ document.addEventListener("DOMContentLoaded", () => {
    */
   const _consoFetchInProgress = new Set();
 
-  function fetchConsoForContract(contract, forceSync = false) {
+  function fetchConsoForContract(contract, forceSync = false, includeOlderMonths = false, targetPeriod = null) {
     if (!contract || !contract.prm || contract.prm === "-") {
       renderConsoDetails({ hasData: false, message: "PRM non renseigné pour ce contrat." });
       return;
     }
 
-    // Empêcher les appels concurrents pour le même PRM (évite les syncs multiples)
-    if (_consoFetchInProgress.has(contract.prm)) {
-      console.log(`[Popup] Fetch conso déjà en cours pour PRM ${contract.prm}, ignoré.`);
+    const fetchKey = `${contract.prm}_${includeOlderMonths ? "all" : "12m"}`;
+    // Empêcher les appels concurrents identiques pour le même PRM
+    if (_consoFetchInProgress.has(fetchKey)) {
+      console.log(`[Popup] Fetch conso déjà en cours pour PRM ${fetchKey}, ignoré.`);
       return;
     }
-    _consoFetchInProgress.add(contract.prm);
+    _consoFetchInProgress.add(fetchKey);
 
     if (badgeConsoStatus) {
-      badgeConsoStatus.textContent = "Chargement...";
+      if (targetPeriod === "last_year") {
+        badgeConsoStatus.textContent = `Année ${new Date().getFullYear() - 1}...`;
+      } else {
+        badgeConsoStatus.textContent = includeOlderMonths ? "Historique > 12m..." : "Chargement...";
+      }
       badgeConsoStatus.className = "badge badge-info";
     }
     if (syncConsoBtn) {
       syncConsoBtn.classList.add("spinning");
       syncConsoBtn.disabled = true;
     }
+    if (includeOlderMonths) {
+      [consoFilter12m, consoFilterCurrentYear, consoFilterLastYear, consoFilterAll].forEach((chip) => {
+        if (chip) chip.disabled = true;
+      });
+      if (loadOlderConsoBtn) {
+        loadOlderConsoBtn.disabled = true;
+        if (loadOlderConsoBtnText) {
+          loadOlderConsoBtnText.textContent = "⏳ Chargement de l'historique au-delà de 12 mois...";
+        }
+      }
+    }
+
+    const prmContracts = (contractsList || []).filter(c => String(c.prm) === String(contract.prm));
 
     chrome.runtime.sendMessage({
       type: "FETCH_CONSO_DATA",
@@ -3444,22 +3928,36 @@ document.addEventListener("DOMContentLoaded", () => {
         prmId: contract.prm,
         propertyId: contract.propertyId,
         contract: contract,
+        prmContracts: prmContracts.length > 0 ? prmContracts : [contract],
         propertyIds: activeTabContext?.propertyIds || [],
         propertyMapping: activeTabContext?.propertyMapping || [],
         tabId: activeTabContext?.tabId || null,
-        forceSync: forceSync
+        forceSync: forceSync,
+        includeOlderMonths: Boolean(includeOlderMonths)
       }
     }, (response) => {
       // Libérer le verrou pour permettre de futurs appels
-      _consoFetchInProgress.delete(contract.prm);
+      _consoFetchInProgress.delete(fetchKey);
 
       if (syncConsoBtn) {
         syncConsoBtn.classList.remove("spinning");
         syncConsoBtn.disabled = false;
       }
+      if (loadOlderConsoBtn) {
+        loadOlderConsoBtn.disabled = false;
+      }
+      [consoFilter12m, consoFilterCurrentYear, consoFilterLastYear, consoFilterAll].forEach((chip) => {
+        if (chip) chip.disabled = false;
+      });
 
       if (response?.success && response.data && response.data.hasData) {
         const data = response.data;
+        const effectivePeriod = targetPeriod || contract.consoMensuelle?.periodFilter || (includeOlderMonths ? "all" : "12m");
+        data.periodFilter = effectivePeriod;
+        if (includeOlderMonths) {
+          data.olderMonthsLoaded = true;
+          data.showOlderMonths = effectivePeriod === "all";
+        }
         // Le suivi conso est partagé entre tous les contrats du même PRM (changement d'offre inclus)
         const targets = (contractsList || []).filter(c => String(c.prm) === String(contract.prm));
         if (targets.length === 0) targets.push(contract);
@@ -3516,6 +4014,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (!conso || !conso.hasData) {
+      if (consoPeriodFilterBar) consoPeriodFilterBar.classList.add("hidden");
+      if (copyConsoBtn) copyConsoBtn.classList.add("hidden");
+      if (copyConsoCurrentMonthBtn) copyConsoCurrentMonthBtn.classList.add("hidden");
+      if (loadOlderConsoBtn) loadOlderConsoBtn.classList.add("hidden");
+      if (consoHistoryBadge) consoHistoryBadge.classList.add("hidden");
       if (consoMoisEnCoursBox) consoMoisEnCoursBox.classList.add("hidden");
       if (consoMoisPrecedentsSection) consoMoisPrecedentsSection.classList.add("hidden");
       if (consoTotalBox) consoTotalBox.classList.add("hidden");
@@ -3552,6 +4055,11 @@ document.addEventListener("DOMContentLoaded", () => {
     // Rien dans l'onglet Mois (mois en cours absent) : on n'affiche aucune consommation,
     // ni les mois précédents ni le total cumulé.
     if (conso.currentMonthPending) {
+      if (consoPeriodFilterBar) consoPeriodFilterBar.classList.add("hidden");
+      if (copyConsoBtn) copyConsoBtn.classList.add("hidden");
+      if (copyConsoCurrentMonthBtn) copyConsoCurrentMonthBtn.classList.add("hidden");
+      if (loadOlderConsoBtn) loadOlderConsoBtn.classList.add("hidden");
+      if (consoHistoryBadge) consoHistoryBadge.classList.add("hidden");
       if (consoMoisEnCoursBox) consoMoisEnCoursBox.classList.add("hidden");
       if (consoMoisPrecedentsSection) consoMoisPrecedentsSection.classList.add("hidden");
       if (consoTotalBox) consoTotalBox.classList.add("hidden");
@@ -3563,15 +4071,24 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    function getHcRatioBadgeHtml(hp, hc) {
-      if (!hp || !hc) return "";
+    if (copyConsoBtn) copyConsoBtn.classList.remove("hidden");
+
+    function createHcRatioBadgeElement(hp, hc, detailed = false) {
+      if (!hp || !hc) return null;
       const total = hp + hc;
-      if (total === 0) return "";
+      if (total === 0) return null;
       const ratio = Math.round((hc / total) * 100);
       const isRentable = ratio >= 30;
-      const badgeClass = isRentable ? "rentable" : "non-rentable";
-      const icon = isRentable ? "✅" : "⚠️";
-      return `<span class="conso-ratio-badge ${badgeClass}">${ratio}% HC ${icon}</span>`;
+      const badge = document.createElement("span");
+      badge.className = `conso-ratio-badge ${isRentable ? "rentable" : "non-rentable"}`;
+      if (detailed) {
+        const icon = isRentable ? "✅ Rentable" : "⚠️ Non rentable (< 30%)";
+        badge.textContent = `${ratio}% en Heures Creuses (${icon})`;
+      } else {
+        const icon = isRentable ? "✅" : "⚠️";
+        badge.textContent = `${ratio}% HC ${icon}`;
+      }
+      return badge;
     }
 
     // Réconciliation avec le total extrait directement de la page Espace Client si disponible
@@ -3592,31 +4109,90 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // 1. Mois en cours
-    if (conso.moisEnCours) {
+    const allPrecedents = conso.moisPrecedents || [];
+    const {
+      periodFilter,
+      current: displayedCur,
+      precedents: displayedPrecedents,
+      all: allDisplayedMonths,
+      isShowingOlder,
+      recentPrecedentsLimit,
+      currentYear,
+      lastYear,
+      periodTitle,
+      historyTitle
+    } = getDisplayedConsoMonths(conso);
+    const olderActualCount = Math.max(0, allPrecedents.length - recentPrecedentsLimit);
+
+    // Mise à jour de la barre de filtres de période
+    if (consoPeriodFilterBar) {
+      consoPeriodFilterBar.classList.remove("hidden");
+      if (consoFilterCurrentYear) {
+        consoFilterCurrentYear.textContent = `Année ${currentYear} (1er janv.)`;
+      }
+      if (consoFilterLastYear) {
+        consoFilterLastYear.textContent = `Année ${lastYear}`;
+      }
+      if (consoFilterAll) {
+        if (conso.hasOlderMonths || olderActualCount > 0) {
+          consoFilterAll.classList.remove("hidden");
+        } else {
+          consoFilterAll.classList.add("hidden");
+        }
+      }
+      [consoFilter12m, consoFilterCurrentYear, consoFilterLastYear, consoFilterAll].forEach((chip) => {
+        if (!chip) return;
+        const p = chip.getAttribute("data-period");
+        chip.classList.toggle("active", p === periodFilter);
+      });
+    }
+
+    // 1. Mois en cours (masqué en mode "last_year" pour dédier la vue à l'année passée)
+    if (displayedCur) {
       if (consoMoisEnCoursBox) consoMoisEnCoursBox.classList.remove("hidden");
-      if (consoMoisEnCoursLabel) consoMoisEnCoursLabel.textContent = conso.moisEnCours.label || "-";
-      if (consoMoisEnCoursKwh) consoMoisEnCoursKwh.textContent = conso.moisEnCours.kwhFormate || "- kWh";
+      if (copyConsoCurrentMonthBtn) copyConsoCurrentMonthBtn.classList.remove("hidden");
+      if (consoMoisEnCoursLabel) consoMoisEnCoursLabel.textContent = displayedCur.label || "-";
+      if (consoMoisEnCoursKwh) consoMoisEnCoursKwh.textContent = displayedCur.kwhFormate || "- kWh";
       if (consoMoisEnCoursCost) {
-        consoMoisEnCoursCost.textContent = (conso.moisEnCours.costFormate && conso.moisEnCours.costFormate !== "-") 
-          ? conso.moisEnCours.costFormate 
+        consoMoisEnCoursCost.textContent = (displayedCur.costFormate && displayedCur.costFormate !== "-")
+          ? displayedCur.costFormate
           : "";
       }
 
       if (consoMoisEnCoursBreakdown) {
-        const parts = [];
-        if (conso.moisEnCours.hpKwh && conso.moisEnCours.hcKwh) {
-          const badgeHtml = getHcRatioBadgeHtml(conso.moisEnCours.hpKwh, conso.moisEnCours.hcKwh);
-          parts.push(`HP : ${conso.moisEnCours.hpKwh.toLocaleString("fr-FR")} kWh • HC : ${conso.moisEnCours.hcKwh.toLocaleString("fr-FR")} kWh ${badgeHtml}`);
+        consoMoisEnCoursBreakdown.textContent = "";
+        let hasBreakdown = false;
+
+        if (displayedCur.hpKwh && displayedCur.hcKwh) {
+          const hpHcText = document.createTextNode(
+            `HP : ${displayedCur.hpKwh.toLocaleString("fr-FR")} kWh • HC : ${displayedCur.hcKwh.toLocaleString("fr-FR")} kWh `
+          );
+          consoMoisEnCoursBreakdown.appendChild(hpHcText);
+          const badgeEl = createHcRatioBadgeElement(displayedCur.hpKwh, displayedCur.hcKwh, false);
+          if (badgeEl) consoMoisEnCoursBreakdown.appendChild(badgeEl);
+          hasBreakdown = true;
         }
-        if (conso.moisEnCours.costEnergyEur !== undefined && conso.moisEnCours.costAboEur !== undefined && conso.moisEnCours.costAboEur > 0) {
-          parts.push(`Énergie : ${conso.moisEnCours.costEnergyEur.toFixed(2).replace(".", ",")} € • Abonnement : ${conso.moisEnCours.costAboEur.toFixed(2).replace(".", ",")} €`);
+
+        if (displayedCur.costEnergyEur !== undefined && displayedCur.costEnergyEur !== null && displayedCur.costAboEur !== undefined && displayedCur.costAboEur > 0) {
+          if (hasBreakdown) {
+            const sep = document.createElement("span");
+            sep.style.margin = "0 4px";
+            sep.style.color = "#52525b";
+            sep.textContent = "|";
+            consoMoisEnCoursBreakdown.appendChild(document.createTextNode(" "));
+            consoMoisEnCoursBreakdown.appendChild(sep);
+            consoMoisEnCoursBreakdown.appendChild(document.createTextNode(" "));
+          }
+          const costDetailsText = document.createTextNode(
+            `Énergie : ${displayedCur.costEnergyEur.toFixed(2).replace(".", ",")} € • Abonnement : ${displayedCur.costAboEur.toFixed(2).replace(".", ",")} €`
+          );
+          consoMoisEnCoursBreakdown.appendChild(costDetailsText);
+          hasBreakdown = true;
         }
-        if (parts.length > 0) {
-          consoMoisEnCoursBreakdown.innerHTML = parts.join(' <span style="margin: 0 4px; color: #52525b;">|</span> ');
+
+        if (hasBreakdown) {
           consoMoisEnCoursBreakdown.classList.remove("hidden");
         } else {
-          consoMoisEnCoursBreakdown.textContent = "";
           consoMoisEnCoursBreakdown.classList.add("hidden");
         }
       }
@@ -3631,23 +4207,56 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     } else if (consoMoisEnCoursBox) {
       consoMoisEnCoursBox.classList.add("hidden");
+      if (copyConsoCurrentMonthBtn) copyConsoCurrentMonthBtn.classList.add("hidden");
     }
 
-    // 2. Mois précédents
-    const precedents = conso.moisPrecedents || [];
+    // 2. Liste des mois de la période sélectionnée
+    if (consoHistoryTitle) {
+      consoHistoryTitle.textContent = historyTitle;
+    }
+
     if (consoMonthsList) {
       while (consoMonthsList.firstChild) {
         consoMonthsList.removeChild(consoMonthsList.firstChild);
       }
+      consoMonthsList.classList.toggle("expanded", isShowingOlder || periodFilter === "last_year" || periodFilter === "current_year");
     }
 
-    if (precedents.length > 0 && consoMonthsList && consoMoisPrecedentsSection) {
-      consoMoisPrecedentsSection.classList.remove("hidden");
-      const maxKwh = conso.maxKwh || 1;
+    const isFilteredYearEmpty = (periodFilter === "last_year" || periodFilter === "current_year") && displayedPrecedents.length === 0 && !displayedCur;
+    const showHistorySection = displayedPrecedents.length > 0 || Boolean(conso.hasOlderMonths) || isFilteredYearEmpty;
 
-      precedents.forEach((item) => {
+    if (showHistorySection && consoMonthsList && consoMoisPrecedentsSection) {
+      consoMoisPrecedentsSection.classList.remove("hidden");
+      const maxKwh = Math.max(...allDisplayedMonths.map(i => i.kwh || 0), 1);
+
+      if (consoHistoryBadge) {
+        if (displayedPrecedents.length > 0) {
+          consoHistoryBadge.textContent = `${displayedPrecedents.length} mois`;
+          consoHistoryBadge.classList.remove("hidden");
+        } else {
+          consoHistoryBadge.classList.add("hidden");
+        }
+      }
+
+      if (isFilteredYearEmpty) {
+        const emptyYearRow = document.createElement("div");
+        emptyYearRow.className = "conso-empty-state";
+        emptyYearRow.textContent = periodFilter === "last_year"
+          ? `Aucune consommation enregistrée sur ce contrat pour l'année ${lastYear}.`
+          : `Aucune consommation enregistrée sur ce contrat pour l'année ${currentYear}.`;
+        consoMonthsList.appendChild(emptyYearRow);
+      }
+
+      displayedPrecedents.forEach((item, idx) => {
+        if (isShowingOlder && idx === recentPrecedentsLimit) {
+          const divider = document.createElement("div");
+          divider.className = "conso-older-divider";
+          divider.textContent = `Au-delà de 12 mois (+${olderActualCount} mois)`;
+          consoMonthsList.appendChild(divider);
+        }
+
         const row = document.createElement("div");
-        row.className = "conso-month-row";
+        row.className = "conso-month-row" + (isShowingOlder && idx >= recentPrecedentsLimit ? " older-month" : "");
 
         const header = document.createElement("div");
         header.className = "conso-month-row-header";
@@ -3671,6 +4280,27 @@ document.addEventListener("DOMContentLoaded", () => {
           stats.appendChild(costSpan);
         }
 
+        const monthCopyBtn = document.createElement("button");
+        monthCopyBtn.type = "button";
+        monthCopyBtn.className = "conso-month-copy-btn";
+        monthCopyBtn.title = `Copier la consommation de ${item.label}`;
+        monthCopyBtn.setAttribute("aria-label", `Copier ${item.label}`);
+        monthCopyBtn.textContent = "📋";
+        monthCopyBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const text = formatSingleMonthConsoText(item, false);
+          navigator.clipboard.writeText(text).then(() => {
+            showCopyFeedback(`Conso ${item.label} copiée !`);
+            monthCopyBtn.classList.add("copied");
+            monthCopyBtn.textContent = "✓";
+            setTimeout(() => {
+              monthCopyBtn.classList.remove("copied");
+              monthCopyBtn.textContent = "📋";
+            }, 1400);
+          });
+        });
+        stats.appendChild(monthCopyBtn);
+
         header.appendChild(label);
         header.appendChild(stats);
 
@@ -3690,28 +4320,62 @@ document.addEventListener("DOMContentLoaded", () => {
         if (item.hpKwh && item.hcKwh) {
           const sub = document.createElement("div");
           sub.className = "conso-breakdown-text";
-          const badgeHtml = getHcRatioBadgeHtml(item.hpKwh, item.hcKwh);
-          sub.innerHTML = `HP : ${item.hpKwh.toLocaleString("fr-FR")} kWh • HC : ${item.hcKwh.toLocaleString("fr-FR")} kWh ${badgeHtml}`;
+          sub.appendChild(document.createTextNode(
+            `HP : ${item.hpKwh.toLocaleString("fr-FR")} kWh • HC : ${item.hcKwh.toLocaleString("fr-FR")} kWh `
+          ));
+          const badgeEl = createHcRatioBadgeElement(item.hpKwh, item.hcKwh, false);
+          if (badgeEl) sub.appendChild(badgeEl);
           row.appendChild(sub);
         }
 
         consoMonthsList.appendChild(row);
       });
+
+      // Gestion du bouton « Voir au-delà de 12 mois » (affiché en vue 12m ou all)
+      if (loadOlderConsoBtn && loadOlderConsoBtnText) {
+        if (conso.hasOlderMonths && (periodFilter === "12m" || periodFilter === "all")) {
+          loadOlderConsoBtn.classList.remove("hidden");
+          const sinceSuffix = conso.oldestEligibleLabel ? ` · depuis ${conso.oldestEligibleLabel}` : "";
+          if (!conso.olderMonthsLoaded) {
+            loadOlderConsoBtn.disabled = false;
+            loadOlderConsoBtn.classList.remove("expanded");
+            const countHint = conso.olderMonthsCount > 0 ? ` (+${conso.olderMonthsCount} mois${sinceSuffix})` : "";
+            loadOlderConsoBtnText.textContent = `📅 Voir au-delà de 12 mois${countHint}`;
+          } else if (olderActualCount > 0) {
+            loadOlderConsoBtn.disabled = false;
+            if (isShowingOlder) {
+              loadOlderConsoBtn.classList.add("expanded");
+              loadOlderConsoBtnText.textContent = "🔼 Revenir aux 12 derniers mois";
+            } else {
+              loadOlderConsoBtn.classList.remove("expanded");
+              loadOlderConsoBtnText.textContent = `📅 Voir au-delà de 12 mois (+${olderActualCount} mois${sinceSuffix})`;
+            }
+          } else {
+            loadOlderConsoBtn.disabled = true;
+            loadOlderConsoBtn.classList.remove("expanded");
+            loadOlderConsoBtnText.textContent = "ℹ️ Aucun relevé Enedis disponible au-delà de 12 mois";
+          }
+        } else {
+          loadOlderConsoBtn.classList.add("hidden");
+        }
+      }
     } else if (consoMoisPrecedentsSection) {
       consoMoisPrecedentsSection.classList.add("hidden");
+      if (loadOlderConsoBtn) loadOlderConsoBtn.classList.add("hidden");
     }
 
-    // 3. Total cumulé et moyenne (sur les mois affichés : jusqu'à 12 mois)
+    // 3. Total cumulé et moyenne (calculés dynamiquement sur la période sélectionnée)
     if (consoTotalBox) {
-      const allMonths = [conso.moisEnCours, ...(conso.moisPrecedents || [])].filter(Boolean);
-      if (allMonths.length > 0) {
-        const nbM = allMonths.length;
-        const totKwh = conso.totalKwh !== undefined ? conso.totalKwh : Math.round(allMonths.reduce((s, m) => s + (m.kwh || 0), 0) * 10) / 10;
-        const totCost = conso.totalCostEur !== undefined ? conso.totalCostEur : Math.round(allMonths.reduce((s, m) => s + (m.costEur || 0), 0) * 100) / 100;
+      if (allDisplayedMonths.length > 0) {
+        const nbM = allDisplayedMonths.length;
+        const totKwh = Math.round(allDisplayedMonths.reduce((s, m) => s + (m.kwh || 0), 0) * 10) / 10;
+        const totCost = Math.round(allDisplayedMonths.reduce((s, m) => s + (m.costEur || 0), 0) * 100) / 100;
+        const totHp = Math.round(allDisplayedMonths.reduce((s, m) => s + (m.hpKwh || 0), 0) * 10) / 10;
+        const totHc = Math.round(allDisplayedMonths.reduce((s, m) => s + (m.hcKwh || 0), 0) * 10) / 10;
         const avgKwh = Math.round((totKwh / nbM) * 10) / 10;
         const avgCost = totCost > 0 ? Math.round((totCost / nbM) * 100) / 100 : null;
 
-        if (consoTotalTitle) consoTotalTitle.textContent = `Total cumulé (${nbM} mois)`;
+        if (consoTotalTitle) consoTotalTitle.textContent = periodTitle;
         if (consoTotalBadge) consoTotalBadge.textContent = `${nbM} mois`;
         if (consoTotalKwh) consoTotalKwh.textContent = `${totKwh.toLocaleString("fr-FR")} kWh`;
         if (consoTotalCost) consoTotalCost.textContent = totCost > 0 ? `${totCost.toFixed(2).replace(".", ",")} €` : "-";
@@ -3721,12 +4385,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const consoTotalRatioHc = document.getElementById("consoTotalRatioHc");
         if (consoTotalRatioHc) {
-          if (conso.totalHp && conso.totalHc) {
-            const ratio = Math.round((conso.totalHc / (conso.totalHp + conso.totalHc)) * 100);
-            const isRentable = ratio >= 30;
-            const badgeClass = isRentable ? "rentable" : "non-rentable";
-            const icon = isRentable ? "✅ Rentable" : "⚠️ Non rentable (< 30%)";
-            consoTotalRatioHc.innerHTML = `Ratio global : <span class="conso-ratio-badge ${badgeClass}">${ratio}% en Heures Creuses (${icon})</span>`;
+          consoTotalRatioHc.textContent = "";
+          if (totHp > 0 && totHc > 0) {
+            consoTotalRatioHc.appendChild(document.createTextNode("Ratio global : "));
+            const badgeEl = createHcRatioBadgeElement(totHp, totHc, true);
+            if (badgeEl) consoTotalRatioHc.appendChild(badgeEl);
             consoTotalRatioHc.classList.remove("hidden");
           } else {
             consoTotalRatioHc.classList.add("hidden");
@@ -3772,12 +4435,11 @@ document.addEventListener("DOMContentLoaded", () => {
     contentState.classList.remove("hidden");
     const heroCard = document.querySelector(".hero-card");
     const detailsCard = document.querySelector(".details-card");
-    const consoCard = document.querySelector(".conso-card");
     const actionsFooter = document.querySelector(".actions-footer");
     if (heroCard) heroCard.style.display = "";
     if (detailsCard) detailsCard.style.display = "";
-    if (consoCard) consoCard.style.display = "";
     if (actionsFooter) actionsFooter.style.display = "";
+    syncModuleVisibilityUI();
   }
 
   function showCopyFeedback(msg) {
@@ -3788,8 +4450,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 2000);
   }
 
-  // En mode fenêtre autonome : synchronisation dynamique automatique dès que le conseiller change d'onglet sur Kraken
-  if (currentMode === "window") {
+  // En mode volet latéral (Side Panel) ou fenêtre autonome : synchronisation dynamique dès que le conseiller change d'onglet ou de compte sur Kraken
+  if (currentMode !== "fullscreen") {
     let syncDebounceTimer = null;
     const handleTabChange = async () => {
       clearTimeout(syncDebounceTimer);
@@ -3801,12 +4463,12 @@ document.addEventListener("DOMContentLoaded", () => {
             const m = krakenTab.url.match(/(?:accounts|comptes)\/(A-[A-Z0-9]+)/i);
             const newAcc = m ? m[1] : null;
             if (newAcc && newAcc !== currentAccountNumber) {
-              console.log(`[Fenêtre Compagnon] Changement de compte détecté dans Kraken (${newAcc}), actualisation automatique...`);
+              console.log(`[Volet Latéral] Changement de compte détecté dans Kraken (${newAcc}), actualisation du contrat...`);
               loadData(false);
             }
           }
         } catch (_) {}
-      }, 350);
+      }, 300);
     };
 
     chrome.tabs.onActivated.addListener(handleTabChange);
@@ -3817,11 +4479,18 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Écouteur réactif des mises à jour du cache de fond (enrichissement conso multi-logements)
+  // Écouteur réactif des mises à jour du cache et du clic sur le bouton Kraken
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
     if (changes[THEME_STORAGE_KEY]) {
       applyTheme(changes[THEME_STORAGE_KEY].newValue);
+    }
+    if (changes.sidepanel_target_context?.newValue) {
+      const ctx = changes.sidepanel_target_context.newValue;
+      if (ctx.account && ctx.account !== currentAccountNumber) {
+        loadData(false);
+        return;
+      }
     }
     if (!currentAccountNumber) return;
     const cacheKey = `account_cache_${currentAccountNumber}`;
@@ -3847,7 +4516,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
           }
         }
-        if (currentUpdated && currentContract?.consoMensuelle) {
+        if (currentUpdated && activeModules.conso && currentContract?.consoMensuelle) {
           renderConsoDetails(currentContract.consoMensuelle);
         }
       }

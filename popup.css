@@ -25,14 +25,153 @@
 }
 
 body {
-  width: 380px;
-  min-height: 480px;
+  width: 100%;
+  min-width: 320px;
+  min-height: 100vh;
   background-color: var(--bg-main);
   color: var(--text-main);
   font-family: var(--font-family);
   font-size: 13px;
   line-height: 1.5;
   user-select: text;
+}
+
+.content-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.contrat-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Barre d'activation des modules (Contrat, Conso, Mensualités, SGE) */
+.module-toggle-bar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 5px;
+  position: sticky;
+  top: 6px;
+  z-index: 25;
+  box-shadow: var(--shadow);
+}
+
+.module-pill {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  padding: 6px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  transition: all 0.18s ease;
+  min-width: 0;
+}
+
+.module-pill:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.module-pill.active {
+  background: rgba(96, 240, 248, 0.15);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  box-shadow: 0 2px 8px rgba(0, 240, 255, 0.14);
+}
+
+.module-pill-icon {
+  font-size: 14px;
+  line-height: 1.1;
+}
+
+.module-pill-label {
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Encart de boutons d'activation rapide sous le contrat */
+.ondemand-launcher-box {
+  background: var(--bg-card);
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 11px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ondemand-launcher-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.ondemand-launcher-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.ondemand-launch-btn {
+  appearance: none;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-main);
+  padding: 9px 6px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  transition: all 0.18s ease;
+}
+
+.ondemand-launch-btn:hover {
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 240, 255, 0.15);
+}
+
+.ondemand-launch-btn.active {
+  background: rgba(96, 240, 248, 0.14);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+}
+
+.ondemand-launch-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.ondemand-launch-text {
+  font-size: 10.5px;
+  white-space: nowrap;
 }
 
 .app-container {
@@ -294,10 +433,13 @@ body {
   color: var(--accent-cyan);
 }
 
-/* Plages Heures Creuses : tout sur une seule ligne */
+/* Plages Heures Creuses : affichage multi-lignes propre sans rognage horizontal */
 .hc-value-inline {
   display: inline;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.45;
 }
 
 .hc-value-inline .hc-line {
@@ -306,6 +448,20 @@ body {
 
 .hc-value-inline .hc-separator {
   color: var(--text-muted);
+}
+
+.hc-value-stacked {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.hc-value-stacked .hc-line-block {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Carte Détails */
@@ -349,6 +505,18 @@ body {
 .detail-row.stacked-row .detail-value-wrapper,
 .detail-row.hc-row .detail-value-wrapper {
   justify-content: flex-start;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.detail-row.hc-row .detail-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: normal;
+}
+
+.detail-row.hc-row .copy-button {
+  flex: 0 0 auto;
 }
 
 .detail-label {
@@ -570,10 +738,85 @@ body {
   color: var(--accent-pink);
 }
 
+.conso-copy-btn {
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.28);
+  color: var(--accent-cyan);
+  border-radius: 6px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.conso-copy-btn:hover {
+  background: rgba(0, 240, 255, 0.16);
+  border-color: var(--accent-cyan);
+  transform: translateY(-1px);
+}
+
+.conso-copy-btn:active {
+  transform: translateY(0);
+}
+
+.conso-copy-btn.copied {
+  background: rgba(16, 195, 149, 0.18);
+  border-color: rgba(16, 195, 149, 0.45);
+  color: var(--accent-green);
+}
+
 .conso-content-body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* Sélecteur de période de consommation */
+.conso-period-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.conso-period-chip {
+  flex: 1 1 auto;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: var(--text-muted);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.conso-period-chip:hover:not(:disabled) {
+  background: rgba(0, 240, 255, 0.08);
+  border-color: rgba(0, 240, 255, 0.30);
+  color: var(--text-main);
+}
+
+.conso-period-chip.active {
+  background: rgba(0, 240, 255, 0.14);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  font-weight: 700;
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.15);
+}
+
+.conso-period-chip:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 /* Encart Mois en cours */
@@ -593,6 +836,12 @@ body {
   justify-content: space-between;
 }
 
+.conso-current-top-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .conso-tag {
   font-size: 10px;
   font-weight: 700;
@@ -605,6 +854,37 @@ body {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
+}
+
+.conso-month-copy-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: var(--text-muted);
+  border-radius: 4px;
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  font-size: 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.conso-month-copy-btn:hover {
+  background: rgba(0, 240, 255, 0.14);
+  border-color: rgba(0, 240, 255, 0.35);
+  color: var(--accent-cyan);
+  transform: scale(1.06);
+}
+
+.conso-month-copy-btn.copied {
+  background: rgba(16, 195, 149, 0.20);
+  border-color: rgba(16, 195, 149, 0.45);
+  color: var(--accent-green);
 }
 
 .conso-current-values {
@@ -652,12 +932,29 @@ body {
   gap: 6px;
 }
 
+.conso-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .conso-history-title {
   font-size: 10px;
   font-weight: 700;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.conso-history-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(0, 240, 255, 0.12);
+  color: var(--accent-cyan);
+  font-family: var(--font-mono);
 }
 
 .conso-months-list {
@@ -667,6 +964,11 @@ body {
   max-height: 180px;
   overflow-y: auto;
   padding-right: 2px;
+  transition: max-height 0.25s ease;
+}
+
+.conso-months-list.expanded {
+  max-height: 290px;
 }
 
 .conso-months-list::-webkit-scrollbar {
@@ -687,10 +989,71 @@ body {
   gap: 4px;
 }
 
+.conso-month-row.older-month {
+  border-left: 2px solid rgba(240, 80, 248, 0.45);
+}
+
+.conso-older-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent-pink);
+  margin: 4px 0 2px;
+  opacity: 0.9;
+}
+
+.conso-older-divider::before,
+.conso-older-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(240, 80, 248, 0.28);
+}
+
+.conso-older-btn {
+  width: 100%;
+  margin-top: 2px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(88, 64, 255, 0.12);
+  border: 1px dashed rgba(96, 240, 248, 0.35);
+  color: var(--accent-cyan);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.conso-older-btn:hover:not(:disabled) {
+  background: rgba(88, 64, 255, 0.22);
+  border-color: var(--accent-cyan);
+  border-style: solid;
+}
+
+.conso-older-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.conso-older-btn.expanded {
+  background: rgba(240, 80, 248, 0.10);
+  border-color: rgba(240, 80, 248, 0.35);
+  color: var(--accent-pink);
+}
+
 .conso-month-row-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
+  gap: 6px;
 }
 
 .conso-month-label {
@@ -703,7 +1066,7 @@ body {
   font-size: 11px;
   font-family: var(--font-mono);
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
 }
 
@@ -781,6 +1144,13 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+}
+
+.conso-total-header-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .conso-total-title {
@@ -1834,6 +2204,14 @@ body.mode-fullscreen #fullscreenBtn {
     margin-bottom: 20px;
   }
 
+  body.mode-fullscreen .contrat-section {
+    column-span: all;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+
+  body.mode-fullscreen .ondemand-launcher-box,
   body.mode-fullscreen .sge-card,
   body.mode-fullscreen .actions-footer {
     column-span: all;
@@ -2020,6 +2398,50 @@ body.mode-fullscreen #fullscreenBtn {
 [data-theme="dark"] .conso-sync-btn:hover {
   background: rgba(148, 159, 255, 0.16);
   border-color: rgba(148, 159, 255, 0.30);
+}
+
+[data-theme="dark"] .conso-copy-btn {
+  background: rgba(96, 240, 248, 0.10);
+  border-color: rgba(96, 240, 248, 0.32);
+  color: #60F0F8;
+}
+
+[data-theme="dark"] .conso-copy-btn:hover {
+  background: rgba(96, 240, 248, 0.18);
+  border-color: #60F0F8;
+}
+
+[data-theme="dark"] .conso-copy-btn.copied {
+  background: rgba(16, 195, 149, 0.22);
+  border-color: rgba(16, 195, 149, 0.50);
+  color: #18F0B8;
+}
+
+[data-theme="dark"] .conso-month-copy-btn {
+  background: rgba(148, 159, 255, 0.08);
+  border-color: rgba(148, 159, 255, 0.18);
+}
+
+[data-theme="dark"] .conso-month-copy-btn:hover {
+  background: rgba(96, 240, 248, 0.16);
+  border-color: rgba(96, 240, 248, 0.40);
+  color: #60F0F8;
+}
+
+[data-theme="dark"] .conso-period-chip {
+  background: rgba(148, 159, 255, 0.06);
+  border-color: rgba(148, 159, 255, 0.16);
+}
+
+[data-theme="dark"] .conso-period-chip:hover:not(:disabled) {
+  background: rgba(96, 240, 248, 0.10);
+  border-color: rgba(96, 240, 248, 0.35);
+}
+
+[data-theme="dark"] .conso-period-chip.active {
+  background: rgba(96, 240, 248, 0.16);
+  border-color: #60F0F8;
+  color: #60F0F8;
 }
 
 [data-theme="dark"] .conso-current-box {
@@ -2377,6 +2799,76 @@ body.mode-fullscreen #fullscreenBtn {
   border-color: rgba(24, 0, 72, 0.30);
 }
 
+[data-theme="light"] .conso-copy-btn {
+  background: rgba(0, 153, 196, 0.08);
+  border-color: rgba(0, 153, 196, 0.30);
+  color: #0077A8;
+}
+
+[data-theme="light"] .conso-copy-btn:hover {
+  background: rgba(0, 153, 196, 0.16);
+  border-color: #0077A8;
+}
+
+[data-theme="light"] .conso-copy-btn.copied {
+  background: rgba(16, 195, 149, 0.14);
+  border-color: rgba(16, 195, 149, 0.40);
+  color: #048E6B;
+}
+
+[data-theme="light"] .conso-month-copy-btn {
+  background: rgba(24, 0, 72, 0.04);
+  border-color: rgba(24, 0, 72, 0.12);
+  color: rgba(24, 0, 72, 0.65);
+}
+
+[data-theme="light"] .conso-month-copy-btn:hover {
+  background: rgba(0, 153, 196, 0.14);
+  border-color: rgba(0, 153, 196, 0.35);
+  color: #0077A8;
+}
+
+[data-theme="light"] .conso-history-badge {
+  background: rgba(0, 153, 196, 0.12);
+  color: #0077A8;
+}
+
+[data-theme="light"] .conso-older-btn {
+  background: rgba(88, 64, 255, 0.06);
+  border-color: rgba(0, 153, 196, 0.40);
+  color: #0077A8;
+}
+
+[data-theme="light"] .conso-older-btn:hover:not(:disabled) {
+  background: rgba(88, 64, 255, 0.12);
+  border-color: #0077A8;
+}
+
+[data-theme="light"] .conso-older-btn.expanded {
+  background: rgba(187, 0, 212, 0.08);
+  border-color: rgba(187, 0, 212, 0.35);
+  color: #BB00D4;
+}
+
+[data-theme="light"] .conso-period-chip {
+  background: rgba(24, 0, 72, 0.04);
+  border-color: rgba(24, 0, 72, 0.14);
+  color: rgba(24, 0, 72, 0.70);
+}
+
+[data-theme="light"] .conso-period-chip:hover:not(:disabled) {
+  background: rgba(0, 153, 196, 0.10);
+  border-color: rgba(0, 153, 196, 0.35);
+  color: #180048;
+}
+
+[data-theme="light"] .conso-period-chip.active {
+  background: rgba(0, 153, 196, 0.15);
+  border-color: #0077A8;
+  color: #0077A8;
+  box-shadow: none;
+}
+
 [data-theme="light"] .conso-current-box {
   border-color: rgba(0, 200, 248, 0.35);
 }
@@ -2640,4 +3132,35 @@ body.mode-fullscreen #fullscreenBtn {
   border-color: rgba(255, 62, 104, 0.40);
   color: #C81E48;
 }
+
+[data-theme="light"] .module-pill:hover {
+  background: rgba(24, 0, 72, 0.05);
+  border-color: rgba(24, 0, 72, 0.12);
+}
+
+[data-theme="light"] .module-pill.active {
+  background: rgba(0, 153, 196, 0.14);
+  border-color: #0077A8;
+  color: #0077A8;
+  box-shadow: none;
+}
+
+[data-theme="light"] .ondemand-launch-btn {
+  background: rgba(88, 64, 255, 0.06);
+  border-color: rgba(24, 0, 72, 0.14);
+}
+
+[data-theme="light"] .ondemand-launch-btn:hover {
+  background: rgba(0, 153, 196, 0.10);
+  border-color: #0077A8;
+  color: #0077A8;
+  box-shadow: 0 4px 12px rgba(0, 153, 196, 0.12);
+}
+
+[data-theme="light"] .ondemand-launch-btn.active {
+  background: rgba(0, 153, 196, 0.14);
+  border-color: #0077A8;
+  color: #0077A8;
+}
+
 
