@@ -321,11 +321,30 @@ document.addEventListener("DOMContentLoaded", () => {
     document.title = "🐙 Octopus & Kraken - Dashboard Contrat";
   }
 
-  // Signaler au background que le volet latéral est ouvert (pour masquer le bouton flottant sur Kraken tant que le volet est ouvert)
-  let sidePanelPort = null;
-  try {
-    sidePanelPort = chrome.runtime.connect({ name: "octopus-sidepanel" });
-  } catch (_) {}
+  // Signaler au background que le volet de cet onglet est ouvert (pour masquer le bouton flottant dans cet onglet Kraken uniquement).
+  // Reconnexion automatique si le service worker est arrêté puis relancé.
+  // Fenêtre compagnon : onglet passé en paramètre. Volet latéral : il s'ouvre toujours sur l'onglet actif.
+  let panelTabId = parseInt(urlParams.get("tabId") || "", 10);
+  function connectSidePanelPort() {
+    try {
+      const port = chrome.runtime.connect({ name: `octopus-sidepanel:${panelTabId}` });
+      port.onDisconnect.addListener(() => {
+        setTimeout(connectSidePanelPort, 1000);
+      });
+    } catch (_) {}
+  }
+  if (currentMode !== "fullscreen") {
+    if (Number.isInteger(panelTabId)) {
+      connectSidePanelPort();
+    } else {
+      chrome.tabs.query({ active: true, currentWindow: true }).then(([activeTab]) => {
+        if (activeTab?.id) {
+          panelTabId = activeTab.id;
+          connectSidePanelPort();
+        }
+      }).catch(() => {});
+    }
+  }
 
   // Thème clair / sombre (persisté et synchronisé entre popup, fenêtre et dashboard)
   const themeToggleBtn = document.getElementById("themeToggleBtn");

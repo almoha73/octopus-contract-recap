@@ -36,7 +36,30 @@
     prevBtn.remove();
   }
 
+  // Une seule instance active par page : après un rechargement de l'extension, l'ancienne instance (orpheline)
+  // continuait à tourner et masquait le bouton de la nouvelle. Chaque instance s'enregistre sur le document
+  // et s'arrête dès qu'elle n'est plus la plus récente ou que son contexte d'extension est invalidé.
+  const INSTANCE_ATTR = "data-octopus-recap-launcher";
+  const instanceId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  document.documentElement.setAttribute(INSTANCE_ATTR, instanceId);
+
+  function isActiveInstance() {
+    let contextValid = false;
+    try {
+      contextValid = Boolean(chrome.runtime && chrome.runtime.id);
+    } catch (_) {}
+    return contextValid && document.documentElement.getAttribute(INSTANCE_ATTR) === instanceId;
+  }
+
   let isSidePanelOpen = false;
+
+  // Position choisie par le conseiller en faisant glisser le bouton (distances au coin bas-droit de la fenêtre),
+  // mémorisée pour tous les onglets Kraken. null = placement automatique à gauche de Kraken Phone.
+  const POSITION_STORAGE_KEY = "recap_launcher_position";
+  const DRAG_THRESHOLD_PX = 4;
+  // Hauteur par défaut : juste au-dessus de la flèche Kraken Phone (en bas à droite) et de son infobulle « Ouvrir »
+  const DEFAULT_BOTTOM_PX = 76;
+  let customPosition = null;
   let currentTheme = "light"; // Charte graphique claire par défaut
 
   const ALLOWED_ACCOUNT_HASH_PREFIXES = [
@@ -169,6 +192,11 @@
   }
 
   function updateLauncherVisibilityAndPosition() {
+    if (!isActiveInstance()) {
+      teardown();
+      return;
+    }
+
     cleanupLegacyInlineButtons();
 
     const existing = document.getElementById(LAUNCHER_ID);
@@ -193,25 +221,108 @@
       btn.style.pointerEvents = "none";
       btn.style.transform = "translateY(12px) scale(0.95)";
     } else {
-      const rightOffset = getRightOffsetForKrakenLayout();
-      btn.style.right = `${rightOffset}px`;
+      if (customPosition) {
+        const clamped = clampPosition(btn, customPosition.right, customPosition.bottom);
+        btn.style.right = `${clamped.right}px`;
+        btn.style.bottom = `${clamped.bottom}px`;
+      } else {
+        btn.style.right = `${getRightOffsetForKrakenLayout()}px`;
+        btn.style.bottom = `${DEFAULT_BOTTOM_PX}px`;
+      }
       btn.style.opacity = "1";
       btn.style.pointerEvents = "auto";
       btn.style.transform = "translateY(0) scale(1)";
     }
   }
 
+  // Garde le bouton entièrement visible dans la fenêtre
+  function clampPosition(btn, right, bottom) {
+    const rect = btn.getBoundingClientRect();
+    const maxRight = Math.max(0, window.innerWidth - rect.width);
+    const maxBottom = Math.max(0, window.innerHeight - rect.height);
+    return {
+      right: Math.round(Math.min(Math.max(0, right), maxRight)),
+      bottom: Math.round(Math.min(Math.max(0, bottom), maxBottom))
+    };
+  }
+
+  /**
+   * Rend le bouton déplaçable à la souris. Un simple clic (déplacement < 4 px) ouvre toujours le volet ;
+   * un glisser déplace le bouton sans ouvrir le volet, et la position est enregistrée.
+   */
+  function makeDraggable(btn) {
+    let dragStart = null;
+    let isDragging = false;
+    let suppressNextClick = false;
+
+    btn.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || isSidePanelOpen) return;
+      const rect = btn.getBoundingClientRect();
+      dragStart = {
+        x: e.clientX,
+        y: e.clientY,
+        right: window.innerWidth - rect.right,
+        bottom: window.innerHeight - rect.bottom
+      };
+      isDragging = false;
+    });
+
+    btn.addEventListener("pointermove", (e) => {
+      if (!dragStart) return;
+      const dx = e.clientX - dragStart.x;
+      const dy = e.clientY - dragStart.y;
+      if (!isDragging) {
+        if (Math.abs(dx) < DRAG_THRESHOLD_PX && Math.abs(dy) < DRAG_THRESHOLD_PX) return;
+        isDragging = true;
+        btn.setPointerCapture(e.pointerId);
+        btn.style.transition = "none";
+        btn.style.cursor = "grabbing";
+      }
+      customPosition = clampPosition(btn, dragStart.right - dx, dragStart.bottom - dy);
+      btn.style.right = `${customPosition.right}px`;
+      btn.style.bottom = `${customPosition.bottom}px`;
+    });
+
+    const endDrag = (e) => {
+      if (!dragStart) return;
+      dragStart = null;
+      if (!isDragging) return;
+      isDragging = false;
+      suppressNextClick = true;
+      try {
+        btn.releasePointerCapture(e.pointerId);
+      } catch (_) {}
+      btn.style.transition = LAUNCHER_TRANSITION;
+      btn.style.cursor = "pointer";
+      try {
+        chrome.storage.local.set({ [POSITION_STORAGE_KEY]: customPosition });
+      } catch (_) {}
+    };
+    btn.addEventListener("pointerup", endDrag);
+    btn.addEventListener("pointercancel", endDrag);
+
+    // Empêcher l'ouverture du volet à la fin d'un glisser (capture : passe avant l'écouteur de clic principal)
+    btn.addEventListener("click", (e) => {
+      if (!suppressNextClick) return;
+      suppressNextClick = false;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }, true);
+  }
+
+  const LAUNCHER_TRANSITION = "opacity 0.2s ease, transform 0.2s ease, right 0.2s ease, bottom 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease";
+
   function createLauncherButton() {
     const btn = document.createElement("button");
     btn.id = LAUNCHER_ID;
     btn.type = "button";
-    btn.title = "Ouvrir le volet latéral Récapitulatif Contrat (Contrat, Conso, Mensualités, SGE)";
+    btn.title = "Ouvrir le volet latéral Récapitulatif Contrat (Contrat, Conso, Mensualités, SGE) — glisser pour déplacer le bouton";
     btn.setAttribute("aria-label", "Ouvrir le récapitulatif contrat");
 
     // Placé en bas à droite de la zone compte (loin des boutons "Modifier le portfolio" en haut et à gauche de Kraken Phone)
     btn.style.cssText = [
       "position: fixed",
-      "bottom: 24px",
+      `bottom: ${DEFAULT_BOTTOM_PX}px`,
       "right: 70px",
       "z-index: 2147483640",
       "display: flex",
@@ -223,7 +334,9 @@
       "cursor: pointer",
       "font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       "text-align: left",
-      "transition: opacity 0.2s ease, transform 0.2s ease, right 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease"
+      "touch-action: none",
+      "user-select: none",
+      `transition: ${LAUNCHER_TRANSITION}`
     ].join("; ");
 
     const iconWrap = document.createElement("span");
@@ -269,6 +382,7 @@
     btn.appendChild(textCol);
 
     applyButtonTheme(btn, false);
+    makeDraggable(btn);
 
     btn.addEventListener("mouseenter", () => {
       if (isSidePanelOpen) return;
@@ -291,6 +405,12 @@
       isSidePanelOpen = true;
       updateLauncherVisibilityAndPosition();
 
+      // Réafficher le bouton si l'ouverture a échoué
+      const restoreButton = () => {
+        isSidePanelOpen = false;
+        updateLauncherVisibilityAndPosition();
+      };
+
       try {
         chrome.runtime.sendMessage({
           type: "OPEN_SIDE_PANEL",
@@ -298,34 +418,63 @@
             account: account,
             url: window.location.href
           }
+        }, (response) => {
+          if (chrome.runtime.lastError || !response || !response.success) {
+            restoreButton();
+          }
         });
-      } catch (_) {}
+      } catch (_) {
+        restoreButton();
+      }
     });
 
     document.body.appendChild(btn);
     return btn;
   }
 
-  // Initialiser l'état d'ouverture du volet latéral et le thème (clair par défaut)
+  // Thème (clair par défaut) et état du volet latéral de CET onglet (fourni par le background)
+  function readPosition(value) {
+    return value && Number.isFinite(value.right) && Number.isFinite(value.bottom)
+      ? { right: value.right, bottom: value.bottom }
+      : null;
+  }
+
+  const onStorageChanged = (changes, area) => {
+    if (area !== "local") return;
+    if (changes.recap_theme) {
+      currentTheme = changes.recap_theme.newValue === "dark" ? "dark" : "light";
+    }
+    if (changes[POSITION_STORAGE_KEY]) {
+      customPosition = readPosition(changes[POSITION_STORAGE_KEY].newValue);
+    }
+    if (changes.recap_theme || changes[POSITION_STORAGE_KEY]) {
+      updateLauncherVisibilityAndPosition();
+    }
+  };
+
+  const onRuntimeMessage = (message, sender) => {
+    if (sender.id !== chrome.runtime.id) return;
+    if (message && message.type === "SIDE_PANEL_STATE" && typeof message.open === "boolean") {
+      isSidePanelOpen = message.open;
+      updateLauncherVisibilityAndPosition();
+    }
+  };
+
   try {
-    chrome.storage.local.get(["sidepanel_is_open", "recap_theme"], (res) => {
-      if (res && typeof res.sidepanel_is_open === "boolean") {
-        isSidePanelOpen = res.sidepanel_is_open;
-      }
+    chrome.storage.local.get(["recap_theme", POSITION_STORAGE_KEY], (res) => {
       currentTheme = res?.recap_theme === "dark" ? "dark" : "light";
+      customPosition = readPosition(res?.[POSITION_STORAGE_KEY]);
       updateLauncherVisibilityAndPosition();
     });
 
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "local") return;
-      if (changes.sidepanel_is_open) {
-        isSidePanelOpen = Boolean(changes.sidepanel_is_open.newValue);
-      }
-      if (changes.recap_theme) {
-        currentTheme = changes.recap_theme.newValue === "dark" ? "dark" : "light";
-      }
+    chrome.runtime.sendMessage({ type: "GET_SIDE_PANEL_STATE" }, (response) => {
+      if (chrome.runtime.lastError) return;
+      isSidePanelOpen = Boolean(response && response.open);
       updateLauncherVisibilityAndPosition();
     });
+
+    chrome.storage.onChanged.addListener(onStorageChanged);
+    chrome.runtime.onMessage.addListener(onRuntimeMessage);
   } catch (_) {}
 
   window.addEventListener("hashchange", updateLauncherVisibilityAndPosition);
@@ -333,7 +482,24 @@
   window.addEventListener("resize", updateLauncherVisibilityAndPosition);
 
   // Surveillance légère des changements d'URL SPA ou d'ouverture/fermeture de Kraken Phone
-  setInterval(updateLauncherVisibilityAndPosition, 800);
+  const watchTimer = setInterval(updateLauncherVisibilityAndPosition, 800);
+
+  // Arrêt complet d'une instance remplacée ou orpheline (sans toucher au bouton de l'instance active)
+  function teardown() {
+    clearInterval(watchTimer);
+    window.removeEventListener("hashchange", updateLauncherVisibilityAndPosition);
+    window.removeEventListener("popstate", updateLauncherVisibilityAndPosition);
+    window.removeEventListener("resize", updateLauncherVisibilityAndPosition);
+    try {
+      chrome.storage.onChanged.removeListener(onStorageChanged);
+      chrome.runtime.onMessage.removeListener(onRuntimeMessage);
+    } catch (_) {}
+    // Si plus aucune instance valide ne gère la page, retirer le bouton devenu inactif
+    if (!document.documentElement.getAttribute(INSTANCE_ATTR) || document.documentElement.getAttribute(INSTANCE_ATTR) === instanceId) {
+      const orphanBtn = document.getElementById(LAUNCHER_ID);
+      if (orphanBtn) orphanBtn.remove();
+    }
+  }
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", updateLauncherVisibilityAndPosition, { once: true });

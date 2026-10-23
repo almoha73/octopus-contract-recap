@@ -3,14 +3,73 @@
  * Conforme Manifest V3 et politiques d'entreprise strictes.
  */
 
-// Configuration du volet latéral natif Chrome (ouverture au clic sur l'icône de l'extension)
-if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((err) => {
-    console.warn("[Background] Info setPanelBehavior :", err.message);
-  });
+// Volet latéral restreint aux onglets Kraken / Espace Client : aucun volet global (pas de side_panel.default_path
+// dans le manifest), le volet n'existe que pour les onglets Kraken / Espace Client activés un par un.
+const PANEL_ALLOWED_HOSTS = ["support.oefr-kraken.energy", "octopusenergy.fr"];
+
+function isPanelAllowedUrl(url) {
+  try {
+    return PANEL_ALLOWED_HOSTS.includes(new URL(url).hostname);
+  } catch (_) {
+    return false;
+  }
 }
 
-// Injection automatique du bouton dans les onglets Kraken déjà ouverts lors du rechargement de l'extension
+/**
+ * Active le volet uniquement pour cet onglet (sans l'ouvrir).
+ * Doit être fait AVANT le clic : chrome.sidePanel.open doit être appelé immédiatement pour conserver le geste
+ * utilisateur, et il échoue si l'activation de l'onglet n'est pas encore terminée.
+ */
+function enablePanelForTab(tabId) {
+  return chrome.sidePanel.setOptions({
+    tabId,
+    path: "popup.html",
+    enabled: true
+  }).catch(() => {});
+}
+
+if (chrome.sidePanel) {
+  // Le clic sur l'icône est géré par chrome.action.onClicked (ouverture ciblée sur l'onglet courant)
+  if (chrome.sidePanel.setPanelBehavior) {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch((err) => {
+      console.warn("[Background] Info setPanelBehavior :", err.message);
+    });
+  }
+  // Volet global désactivé : il ne peut donc s'afficher sur aucun autre onglet (SGE, Gmail, etc.)
+  chrome.sidePanel.setOptions({ enabled: false }).catch(() => {});
+}
+
+// Activer le volet à l'avance sur les onglets Kraken / Espace Client, le fermer dès qu'un onglet en sort
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (!changeInfo.url || !chrome.sidePanel) return;
+  if (isPanelAllowedUrl(changeInfo.url)) {
+    enablePanelForTab(tabId);
+  } else {
+    chrome.sidePanel.setOptions({ tabId, enabled: false }).catch(() => {});
+  }
+});
+
+async function enablePanelOnOpenAllowedTabs() {
+  if (!chrome.sidePanel) return;
+  try {
+    const tabs = await chrome.tabs.query({ url: ["https://support.oefr-kraken.energy/*", "https://octopusenergy.fr/*"] });
+    for (const tab of tabs) {
+      if (tab.id) enablePanelForTab(tab.id);
+    }
+    const allTabs = await chrome.tabs.query({});
+    for (const tab of allTabs) {
+      if (tab.id && tab.url && !isPanelAllowedUrl(tab.url)) {
+        chrome.sidePanel.setOptions({ tabId: tab.id, enabled: false }).catch(() => {});
+      }
+    }
+  } catch (_) {}
+}
+
+chrome.runtime.onInstalled.addListener(enablePanelOnOpenAllowedTabs);
+chrome.runtime.onStartup.addListener(enablePanelOnOpenAllowedTabs);
+
+// Injection automatique du bouton dans les onglets Kraken déjà ouverts lors de l'installation / mise à jour de l'extension
+// (uniquement à ce moment-là : réinjecter à chaque réveil du service worker créait des doublons de scripts)
 async function injectLauncherIntoOpenKrakenTabs() {
   try {
     const tabs = await chrome.tabs.query({ url: "https://support.oefr-kraken.energy/*" });
@@ -18,7 +77,7 @@ async function injectLauncherIntoOpenKrakenTabs() {
       if (!tab.id || !tab.url) continue;
       if (tab.url.includes("/emails/") || tab.url.includes("/partial/")) continue;
       chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
+        target: { tabId: tab.id },
         files: ["kraken-launcher.js"]
       }).catch(() => {});
     }
@@ -28,27 +87,50 @@ async function injectLauncherIntoOpenKrakenTabs() {
 chrome.runtime.onInstalled.addListener(() => {
   injectLauncherIntoOpenKrakenTabs();
 });
-injectLauncherIntoOpenKrakenTabs();
 
-// Suivi de l'état d'ouverture du volet latéral pour masquer automatiquement le bouton sur Kraken quand le volet est ouvert
-let activeSidePanelPorts = 0;
-chrome.storage.local.set({ sidepanel_is_open: false }).catch(() => {});
+// Suivi, onglet par onglet, des volets ouverts (pour masquer le bouton Kraken uniquement dans l'onglet concerné).
+// Persisté en storage.session car le service worker peut être arrêté à tout moment.
+const OPEN_PANEL_TABS_KEY = "sidepanel_open_tabs";
+
+async function getOpenPanelTabs() {
+  try {
+    const res = await chrome.storage.session.get([OPEN_PANEL_TABS_KEY]);
+    return Array.isArray(res[OPEN_PANEL_TABS_KEY]) ? res[OPEN_PANEL_TABS_KEY] : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function setPanelOpenForTab(tabId, isOpen) {
+  const tabs = await getOpenPanelTabs();
+  const next = tabs.filter((id) => id !== tabId);
+  if (isOpen) next.push(tabId);
+  await chrome.storage.session.set({ [OPEN_PANEL_TABS_KEY]: next }).catch(() => {});
+  chrome.tabs.sendMessage(tabId, { type: "SIDE_PANEL_STATE", open: isOpen }).catch(() => {});
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  getOpenPanelTabs().then((tabs) => {
+    if (tabs.includes(tabId)) {
+      chrome.storage.session.set({ [OPEN_PANEL_TABS_KEY]: tabs.filter((id) => id !== tabId) }).catch(() => {});
+    }
+  });
+});
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.sender?.id !== chrome.runtime.id) return;
-  if (port.name === "octopus-sidepanel") {
-    activeSidePanelPorts++;
-    chrome.storage.local.set({ sidepanel_is_open: true }).catch(() => {});
-    port.onDisconnect.addListener(() => {
-      activeSidePanelPorts = Math.max(0, activeSidePanelPorts - 1);
-      if (activeSidePanelPorts === 0) {
-        chrome.storage.local.set({ sidepanel_is_open: false }).catch(() => {});
-      }
-    });
-  }
+  // Nom attendu : "octopus-sidepanel:<tabId>"
+  const m = /^octopus-sidepanel:(\d+)$/.exec(port.name || "");
+  if (!m) return;
+  const tabId = parseInt(m[1], 10);
+  setPanelOpenForTab(tabId, true);
+  port.onDisconnect.addListener(() => {
+    setPanelOpenForTab(tabId, false);
+  });
 });
 
-// Clic sur l'icône de l'extension : ouvrir le volet latéral (ou repli en onglet si sidePanel non supporté)
+// Clic sur l'icône de l'extension : ouvrir le volet latéral sur l'onglet courant s'il s'agit de Kraken / Espace Client,
+// sinon ouvrir le tableau de bord en onglet
 chrome.action.onClicked.addListener((tab) => {
   try {
     let account = null;
@@ -67,12 +149,10 @@ chrome.action.onClicked.addListener((tab) => {
       }).catch(() => {});
     }
 
-    if (chrome.sidePanel && chrome.sidePanel.open) {
-      const openOpts = tab?.id ? { tabId: tab.id } : { windowId: tab?.windowId };
-      chrome.sidePanel.open(openOpts).catch(() => {
-        if (tab?.windowId) {
-          chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
-        }
+    if (chrome.sidePanel && chrome.sidePanel.open && tab?.id && isPanelAllowedUrl(tab.url)) {
+      enablePanelForTab(tab.id);
+      chrome.sidePanel.open({ tabId: tab.id }).catch((err) => {
+        console.warn("[Background] Ouverture du volet impossible :", err.message);
       });
       return;
     }
@@ -98,23 +178,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
 
+  // État du volet pour l'onglet Kraken qui le demande (affichage / masquage du bouton flottant)
+  if (message.type === "GET_SIDE_PANEL_STATE") {
+    const tabId = sender.tab?.id;
+    if (!tabId) {
+      sendResponse({ open: false });
+      return;
+    }
+    // Le bouton Kraken vient de se charger : préparer le volet de cet onglet pour un futur clic
+    if (chrome.sidePanel && isPanelAllowedUrl(sender.tab.url)) {
+      enablePanelForTab(tabId);
+    }
+    getOpenPanelTabs().then((tabs) => sendResponse({ open: tabs.includes(tabId) }));
+    return true;
+  }
+
   // Ouverture du volet latéral depuis le bouton intégré sur la page Kraken / Espace Client
   if (message.type === "OPEN_SIDE_PANEL") {
     const tabId = sender.tab?.id;
     const windowId = sender.tab?.windowId;
     const account = message.payload?.account || extractAccountFromUrl(sender.tab?.url || message.payload?.url);
 
-    // 1. Appel SYNCHRONE immédiat à chrome.sidePanel.open pour préserver le geste utilisateur (user gesture)
+    // 1. Appel SYNCHRONE immédiat à chrome.sidePanel.open pour préserver le geste utilisateur (user gesture),
+    //    volet activé pour cet onglet uniquement
     let sidePanelPromise = null;
-    if (chrome.sidePanel && chrome.sidePanel.open) {
-      if (tabId) {
-        sidePanelPromise = chrome.sidePanel.open({ tabId }).catch(() => {
-          if (windowId) return chrome.sidePanel.open({ windowId });
-          throw new Error("Impossible d'ouvrir le sidePanel");
-        });
-      } else if (windowId) {
-        sidePanelPromise = chrome.sidePanel.open({ windowId });
-      }
+    if (chrome.sidePanel && chrome.sidePanel.open && tabId) {
+      enablePanelForTab(tabId);
+      sidePanelPromise = chrome.sidePanel.open({ tabId });
     }
 
     // 2. Sauvegarder le contexte cible pour que le volet latéral affiche immédiatement ce compte
@@ -159,6 +249,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((e) => sendResponse({ success: false, error: e.message }));
     return true;
   }
+
 
   if (message.type === "FETCH_CONTRACT_DATA") {
     handleFetchContractData(message.payload)

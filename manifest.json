@@ -17,9 +17,6 @@
     "cookies",
     "sidePanel"
   ],
-  "side_panel": {
-    "default_path": "popup.html"
-  },
   "content_scripts": [
     {
       "matches": [
